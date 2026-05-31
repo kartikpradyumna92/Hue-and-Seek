@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.4.1] - 2026-05-30
+
+### Fixed
+- **"Still time before midnight" shown after goal already met** — `hasCapturedToday()` used SQLite's `DATE(..., 'unixepoch')` which operates in UTC. In non-UTC timezones, a photo's UTC date could differ from the local date, causing the check to always return false. Replaced with a direct millisecond timestamp comparison (`dateTaken >= midnightMs`), which is timezone-safe. Also fixed the same bug in `StreakReminderReceiver` so notifications correctly suppress when the goal is met.
+
+---
+
 ## [1.4.0] - 2026-05-30
 
 ### Changed
