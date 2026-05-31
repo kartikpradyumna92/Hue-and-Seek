@@ -22,6 +22,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.colorwalk.app.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -57,6 +60,16 @@ fun HomeScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val color = state.colorOfDay
+
+    // Refresh capturedToday whenever the screen resumes (e.g. returning from camera)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.load()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Live clock — updates every minute
     var now by remember { mutableStateOf(System.currentTimeMillis()) }

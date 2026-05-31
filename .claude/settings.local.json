@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git commit -m 'Fix color-of-day timezone bug *)"
+      "Bash(git commit -m 'Fix color-of-day timezone bug *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'Change validation to dominant color logic + fix home screen staleness *)",
+      "Bash(git push *)"
     ]
   }
 }

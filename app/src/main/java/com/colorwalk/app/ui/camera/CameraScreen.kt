@@ -323,8 +323,8 @@ private fun ResultCard(
         )
         is CaptureState.Failed -> Quad(
             Icons.Default.ErrorOutline,
-            "Not Enough $targetColorName",
-            "${(state.matchPercent * 100).toInt()}% detected — need 60%. Fill more of the frame with $targetColorName.",
+            "$targetColorName Isn't Dominant",
+            "${state.actualDominant} dominated (${(state.matchPercent * 100).toInt()}% was $targetColorName). Make $targetColorName the main subject.",
             Color(0xFFFF5722)
         )
         is CaptureState.ImportWrongDay -> Quad(

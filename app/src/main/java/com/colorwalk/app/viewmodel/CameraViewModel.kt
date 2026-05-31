@@ -21,7 +21,7 @@ sealed class CaptureState {
     object Idle : CaptureState()
     object Processing : CaptureState()
     data class Success(val dominantHex: String) : CaptureState()
-    data class Failed(val matchPercent: Float, val targetColorName: String) : CaptureState()
+    data class Failed(val matchPercent: Float, val targetColorName: String, val actualDominant: String) : CaptureState()
     object StorageError : CaptureState()
     // Import-specific failures
     object ImportNoDate : CaptureState()
@@ -43,7 +43,7 @@ class CameraViewModel @Inject constructor(
         viewModelScope.launch {
             _captureState.value = when (val result = repo.savePhoto(bitmap, targetColor)) {
                 is SaveResult.Success         -> CaptureState.Success(result.validation.dominantHex)
-                is SaveResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, targetColor.name)
+                is SaveResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, targetColor.name, result.validation.actualDominantColor)
                 SaveResult.StorageError       -> CaptureState.StorageError
             }
         }
@@ -54,7 +54,7 @@ class CameraViewModel @Inject constructor(
         viewModelScope.launch {
             _captureState.value = when (val result = repo.importPhoto(uri, targetColor)) {
                 is ImportResult.Success          -> CaptureState.Success(result.validation.dominantHex)
-                is ImportResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, targetColor.name)
+                is ImportResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, targetColor.name, result.validation.actualDominantColor)
                 ImportResult.NoDateMetadata      -> CaptureState.ImportNoDate
                 is ImportResult.NotTakenToday    -> CaptureState.ImportWrongDay(result.dateTaken)
                 ImportResult.StorageError        -> CaptureState.StorageError
