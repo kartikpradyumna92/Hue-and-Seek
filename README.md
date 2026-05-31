@@ -1,44 +1,55 @@
 # Hue & Seek
 
-A daily color-hunt Android app. Every day a new color is assigned — go outside, find it, photograph it, and build your streak.
+A daily mindful photography app for Android. Every day the app picks one color — Red, Orange, Yellow, Green, Blue, Purple, Pink, or Brown — and challenges you to photograph the world through that color's lens. Photos are validated to ensure the target color dominates at least 60% of the frame. Build a daily streak, grow your color gallery, and train your eye to notice everyday details.
 
-## How it works
+> A single color photo walk is an excellent way to cure creative block. Instead of photographing everything, you narrow your focus to one hue and suddenly the world looks completely different.
 
-Each day the app picks one of eight colors (Red, Orange, Yellow, Green, Blue, Purple, Pink, Brown) using a deterministic algorithm based on the calendar date, so every device sees the same color on the same day. You open the camera, find something that matches, and take a photo. The app analyzes the image using HSV color space and requires at least **60% of the pixels** to fall within the target color's hue range before the capture is accepted. A successful capture extends your streak.
+---
+
+## How It Works
+
+Each day the app deterministically picks one of eight colors based on the calendar date — every device sees the same color on the same day. You open the camera, find something that matches, and take a photo. The app analyzes the image using pixel-level HSV color space analysis and requires **at least 60% of the pixels** to fall within the target color's hue range before the capture is accepted. A successful capture extends your daily streak.
+
+---
 
 ## Features
 
 ### Home Screen
-- Displays today's color as a large animated circle with its name and hex code
+- Today's color displayed as a large animated circle with name and hex code
+- Title "Hue & Seek" styled in the day's color
 - Live clock with day, date, and time
 - Background gradient shifts to reflect the day's color
-- Streak counter showing consecutive days completed
+- Streak counter with contextual messages — congratulatory when complete, time-aware nudges when not
 - Quick access to Camera and Gallery
 
-### Camera Screen
-- Live camera preview with front/back camera toggle
+### Camera
+- Live in-app camera with CameraX
+- Color hint pill showing today's target (e.g. "Find Green")
 - Zoom controls: `.5×  1×  1.5×  2×  3×  5×  10×  15×  20×`
-- Shutter button captures and immediately validates the photo
-- Import from device gallery (validates EXIF date — must be today's photo)
-- Result overlay shows match percentage on success or failure with actionable feedback
-
-### Gallery Screen
-- **By Color** view — 2-column grid of color folders, each showing the color swatch and hex
-- **By Date** view — chronological list grouped by month, with thumbnail, color dot, timestamp, and optional location name
-- Tap any color folder to see all photos captured for that color
-- Full-screen photo viewer with swipe support
-- Delete with confirmation dialog (removes from app and device gallery)
+- Front / back camera flip
+- Import from Google Photos — validates EXIF date (must be today) + same 60% color check
+- Result overlay shows match percentage on success or failure
 
 ### Color Validation
-- Scales the captured bitmap down to 80×80 pixels for fast on-device analysis
-- Checks each pixel's HSV values against the target color's hue/saturation/value bounds
-- Uses Android Palette API to extract the dominant color hex for display
-- 60% pixel match required to accept a capture
+- Downsamples captured image to 80×80 pixels for fast on-device analysis
+- Checks every pixel's HSV values against the target color's hue, saturation, and brightness bounds
+- Requires **60% pixel match** to accept — rejected photos are not saved anywhere
+- Failure message shows exact percentage detected (e.g. "47% detected — need 60%")
 
-### Streak Tracking
-- Consecutive-day streak computed from accepted photo timestamps
-- Streak resets if no photo is captured for more than one day
-- Home screen shows a fire icon on the color circle once today's color is captured
+### Gallery
+- **By Color** — 2-column grid of color folders, each showing the color swatch and hex code
+- **By Date** — chronological list grouped by month-year, descending
+- Full-screen photo viewer with swipe left/right navigation and zoom (1× 2× 3× 5×)
+- Each photo shows date, time, and reverse-geocoded location (e.g. "Sunnyvale, California")
+- Delete from gallery removes from both the app and the device gallery
+
+### Streak
+- Counts consecutive calendar days with at least one accepted photo
+- Resets if a day is missed
+- Persists across app reinstalls via Android Auto Backup to Google Drive
+- Daily noon notification if the walk for the day is not yet complete
+
+---
 
 ## Tech Stack
 
@@ -49,51 +60,74 @@ Each day the app picks one of eight colors (Red, Orange, Yellow, Green, Blue, Pu
 | DI | Hilt |
 | Database | Room |
 | Camera | CameraX |
-| Image Loading | Coil |
-| Color Analysis | Android Palette API |
-| Location | Google Play Services Location |
-| Preferences | DataStore |
-| Permissions | Accompanist Permissions |
+| Image loading | Coil |
+| Color validation | Custom HSV pixel analysis + Palette API |
+| Location | FusedLocationProvider |
+| Notifications | AlarmManager + BroadcastReceiver |
+| Backup | Android Auto Backup |
 | Language | Kotlin |
+
+---
 
 ## Requirements
 
 - Android 8.0+ (API 26)
-- Camera hardware required
-- Permissions: Camera, Location (optional, for tagging photos), Media access
+- Physical camera required
+- Permissions: Camera, Location (optional, for photo tagging), Media access, Notifications
+
+---
 
 ## Project Structure
 
 ```
 app/src/main/java/com/colorwalk/app/
 ├── domain/
-│   ├── WalkColor.kt          # Color definitions and daily color picker
-│   ├── ColorValidator.kt     # HSV-based photo validation logic
-│   └── StreakCalculator.kt   # Consecutive-day streak computation
+│   ├── WalkColor.kt           # Color definitions and daily picker
+│   ├── ColorValidator.kt      # HSV pixel-level photo validation
+│   └── StreakCalculator.kt    # Consecutive-day streak logic
 ├── data/
-│   ├── db/                   # Room database, DAO, entities
-│   └── repository/           # PhotoRepository
+│   ├── db/                    # Room database, DAO, entities
+│   └── repository/            # PhotoRepository
+├── notification/
+│   ├── AlarmScheduler.kt      # Daily noon alarm setup
+│   ├── StreakReminderReceiver  # Checks streak, fires notification
+│   ├── BootReceiver.kt        # Reschedules alarm after reboot
+│   └── NotificationHelper.kt  # Notification channel and builder
 ├── ui/
-│   ├── home/                 # HomeScreen
-│   ├── camera/               # CameraScreen + result overlay
-│   ├── gallery/              # GalleryScreen, ColorAlbumScreen, PhotoViewerScreen
-│   └── theme/                # Material 3 theme
-├── viewmodel/                # HomeViewModel, CameraViewModel, GalleryViewModel
-└── di/                       # Hilt AppModule
+│   ├── home/                  # HomeScreen
+│   ├── camera/                # CameraScreen
+│   ├── gallery/               # GalleryScreen, ColorAlbumScreen, PhotoViewerScreen
+│   └── theme/                 # Material 3 dark theme
+├── viewmodel/                 # HomeViewModel, CameraViewModel, GalleryViewModel
+└── di/                        # Hilt AppModule
 ```
+
+---
 
 ## Screenshots
 
-> Coming soon
+_Coming soon_
 
-## Building
+---
 
-Open the project in Android Studio (Hedgehog or later) and run on a physical device or emulator with API 26+.
+## Build Instructions
 
-```bash
-./gradlew assembleDebug
-```
+_Coming soon_
 
-## Author
+---
 
-**Karteek Pradyumna Bulusu**
+## Install
+
+_See [Releases](../../releases) for the latest APK download_
+
+---
+
+## Contributing
+
+_Coming soon_
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
