@@ -5,6 +5,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.colorwalk.app.notification.AlarmScheduler
+import com.colorwalk.app.notification.NotificationHelper
 import androidx.compose.runtime.*
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -22,6 +24,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        NotificationHelper.createChannel(this)
+        AlarmScheduler.scheduleDailyNoon(this)
         setContent {
             ColorWalkTheme {
                 PermissionGate {

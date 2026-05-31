@@ -27,6 +27,28 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
 
+private fun streakMessage(capturedToday: Boolean, streak: Int, colorName: String): String {
+    return if (capturedToday) {
+        when {
+            streak >= 30 -> "30+ days! You have an extraordinary eye for color."
+            streak >= 14 -> "Two weeks strong! $colorName was a great find today."
+            streak >= 7  -> "One full week! Your eye is getting sharper every day."
+            streak >= 3  -> "Great work! $colorName captured. Keep the momentum!"
+            streak == 1  -> "First walk complete! Come back tomorrow to build your streak."
+            else         -> "Today's walk complete! See you tomorrow."
+        }
+    } else {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        when {
+            hour < 10   -> "Morning light is perfect for finding $colorName. Go for a walk!"
+            hour < 13   -> "Great time for a color walk! $colorName is all around you."
+            hour < 17   -> "Afternoon light is golden — $colorName awaits outside."
+            hour < 20   -> "Evening colors pop beautifully. Don't miss today's $colorName!"
+            else        -> "Still time before midnight! Go find some $colorName."
+        }
+    }
+}
+
 @Composable
 fun HomeScreen(
     onOpenCamera: () -> Unit,
@@ -160,33 +182,41 @@ fun HomeScreen(
             // Streak card
             Card(
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.08f)),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (state.capturedToday)
+                        animatedColor.copy(alpha = 0.15f)
+                    else
+                        Color.White.copy(alpha = 0.08f)
+                ),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier.padding(20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.LocalFireDepartment,
-                        contentDescription = null,
-                        tint = Color(0xFFFF6D00),
-                        modifier = Modifier.size(32.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.LocalFireDepartment,
+                            contentDescription = null,
+                            tint = Color(0xFFFF6D00),
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
                         Text(
-                            "${state.streak} day streak",
+                            if (state.streak == 1) "1 day streak"
+                            else "${state.streak} day streak",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color.White
                         )
-                        Text(
-                            if (state.capturedToday) "Today's walk complete!" else "Go capture today's color!",
-                            fontSize = 13.sp,
-                            color = Color.White.copy(alpha = 0.6f)
-                        )
                     }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        streakMessage(state.capturedToday, state.streak, color?.name ?: ""),
+                        fontSize = 13.sp,
+                        color = if (state.capturedToday)
+                            animatedColor.copy(alpha = 0.9f)
+                        else
+                            Color.White.copy(alpha = 0.65f),
+                        lineHeight = 18.sp
+                    )
                 }
             }
 
