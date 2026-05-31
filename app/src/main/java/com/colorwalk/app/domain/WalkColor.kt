@@ -1,6 +1,7 @@
 package com.colorwalk.app.domain
 
 import androidx.compose.ui.graphics.Color
+import java.util.Calendar
 
 data class WalkColor(
     val name: String,
@@ -25,7 +26,9 @@ val WALK_COLORS = listOf(
 )
 
 fun colorForDay(dayEpoch: Long): WalkColor {
-    // Deterministic pick based on day index so every device sees the same color
-    val dayIndex = (dayEpoch / 86_400_000L).toInt()
+    // Use local calendar day so the color never flips at UTC midnight
+    val cal = Calendar.getInstance()   // local timezone
+    cal.timeInMillis = dayEpoch
+    val dayIndex = cal.get(Calendar.YEAR) * 366 + cal.get(Calendar.DAY_OF_YEAR)
     return WALK_COLORS[Math.floorMod(dayIndex, WALK_COLORS.size)]
 }
