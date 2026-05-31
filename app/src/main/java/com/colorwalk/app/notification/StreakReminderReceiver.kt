@@ -27,7 +27,7 @@ class StreakReminderReceiver : BroadcastReceiver() {
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
                 }.timeInMillis
-                val capturedToday = dao.getPhotoForDay(midnight / 1000) != null
+                val capturedToday = dao.getPhotoForDay(midnight) != null
 
                 if (!capturedToday) {
                     val colorName = colorForDay(System.currentTimeMillis()).name
