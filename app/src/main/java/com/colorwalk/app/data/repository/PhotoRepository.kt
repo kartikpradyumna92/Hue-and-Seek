@@ -1,5 +1,6 @@
 package com.colorwalk.app.data.repository
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
@@ -16,6 +17,7 @@ import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.domain.ColorValidator
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.WalkColor
+import com.colorwalk.app.domain.colorForDay
 import com.google.android.gms.location.LocationServices
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -104,6 +107,68 @@ class PhotoRepository @Inject constructor(
             ImportResult.Success(uri, validation)
         }
 
+    /**
+     * Scans MediaStore for ColorWalk photos and inserts any that aren't already in the DB.
+     * Runs on startup so a reinstall (which wipes the DB) automatically recovers the gallery
+     * and streak from photos already saved to the device gallery.
+     */
+    suspend fun syncGalleryWithDatabase() = withContext(Dispatchers.IO) {
+        val existingDays = dao.getAllPhotoDates()
+            .map { StreakCalculator.epochMillisToDayIndex(it) }
+            .toHashSet()
+
+        val selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?"
+        } else {
+            "${MediaStore.Images.Media.DATA} LIKE ?"
+        }
+
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.DISPLAY_NAME),
+            selection,
+            arrayOf("%ColorWalk%"),
+            null
+        )?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(nameCol) ?: continue
+                if (!name.startsWith("ColorWalk_")) continue
+
+                var dateTaken = cursor.getLong(dateCol)
+                if (dateTaken < 1_000_000_000_000L) {
+                    // DATE_TAKEN is 0 or in seconds (pre-Q OEM quirk): fall back to
+                    // the timestamp encoded in the filename (ColorWalk_yyyyMMdd_HHmmss.jpg).
+                    dateTaken = parseDateFromFilename(name) ?: continue
+                }
+
+                val day = StreakCalculator.epochMillisToDayIndex(dateTaken)
+                if (day in existingDays) continue
+
+                val mediaId = cursor.getLong(idCol)
+                val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId)
+                val color = colorForDay(dateTaken)
+
+                dao.insert(
+                    PhotoEntity(
+                        filePath = uri.toString(),
+                        colorName = color.name,
+                        colorHex = color.hex,
+                        dateTaken = dateTaken,
+                        latitude = null,
+                        longitude = null,
+                        locationName = null,
+                        dominantColorHex = color.hex
+                    )
+                )
+                existingDays.add(day)
+            }
+        }
+    }
+
     /** Deletes a photo from both the app DB and the device gallery. */
     suspend fun deletePhoto(photo: PhotoEntity) = withContext(Dispatchers.IO) {
         try {
@@ -114,13 +179,21 @@ class PhotoRepository @Inject constructor(
 
     // ── private helpers ──────────────────────────────────────────────────────
 
+    private fun parseDateFromFilename(name: String): Long? = try {
+        // Filename: ColorWalk_yyyyMMdd_HHmmss.jpg — date is always encoded here.
+        val stem = name.removePrefix("ColorWalk_").removeSuffix(".jpg")
+        SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(stem)?.time
+    } catch (_: Exception) { null }
+
     private fun saveBitmapToGallery(bitmap: Bitmap): Uri? {
-        val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
+        val now = System.currentTimeMillis()
+        val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(now))}.jpg"
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val cv = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, filename)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                 put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ColorWalk")
+                put(MediaStore.Images.Media.DATE_TAKEN, now)
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
             val resolver = context.contentResolver

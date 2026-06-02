@@ -26,6 +26,9 @@ interface PhotoDao {
     @Query("SELECT dateTaken FROM photos ORDER BY dateTaken DESC LIMIT 60")
     suspend fun getRecentPhotoDates(): List<Long>
 
+    @Query("SELECT dateTaken FROM photos")
+    suspend fun getAllPhotoDates(): List<Long>
+
     @Query("DELETE FROM photos WHERE id = :id")
     suspend fun deleteById(id: Long)
 }

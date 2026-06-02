@@ -27,7 +27,7 @@ object StreakCalculator {
         return streak
     }
 
-    private fun epochMillisToDayIndex(millis: Long): Int {
+    internal fun epochMillisToDayIndex(millis: Long): Int {
         val cal = Calendar.getInstance().apply { timeInMillis = millis }
         cal.set(Calendar.HOUR_OF_DAY, 0)
         cal.set(Calendar.MINUTE, 0)

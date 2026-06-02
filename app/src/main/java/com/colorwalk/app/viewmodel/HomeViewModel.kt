@@ -26,7 +26,13 @@ class HomeViewModel @Inject constructor(
     val state: StateFlow<HomeUiState> = _state
 
     init {
+        // Show whatever is already in the DB immediately (fast path).
         load()
+        // Then rebuild any records wiped by a reinstall in the background and refresh.
+        viewModelScope.launch {
+            repo.syncGalleryWithDatabase()
+            load()
+        }
     }
 
     fun load() {

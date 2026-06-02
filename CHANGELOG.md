@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.5.0] - 2026-06-01
+
+### Added
+- **Streak and gallery survive app reinstalls** — when the app is reinstalled (e.g. for an update), all photos previously saved to the device gallery are automatically recovered on first launch. The database is rebuilt from the `Pictures/ColorWalk` folder in the background, restoring the full streak count and every gallery entry without any action required from the user.
+
+### Fixed
+- **Photos saved by the in-app camera had no `DATE_TAKEN` in MediaStore** — the save path never explicitly set this field, so photos captured via the camera screen showed a timestamp of 0 in MediaStore. The gallery sync now falls back to the date encoded in the filename (`ColorWalk_yyyyMMdd_HHmmss.jpg`) when `DATE_TAKEN` is missing, ensuring all photos — past and future — are recoverable. Going forward, `DATE_TAKEN` is also set explicitly on every save.
+- **Gallery sync blocked streak display on cold start** — the sync previously ran before the initial `load()`, showing streak=0 until the MediaStore scan completed. The fix loads existing DB data immediately so the UI is responsive from the first frame, then syncs in the background and refreshes.
+
+---
+
 ## [1.4.1] - 2026-05-30
 
 ### Fixed
