@@ -46,11 +46,14 @@ class PhotoRepository @Inject constructor(
     }
 
     suspend fun hasCapturedToday(): Boolean = withContext(Dispatchers.IO) {
-        val midnight = Calendar.getInstance().apply {
+        val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-        dao.getPhotoForDay(midnight) != null
+        }
+        val midnight = cal.timeInMillis
+        cal.add(Calendar.DAY_OF_MONTH, 1)
+        val tomorrowMidnight = cal.timeInMillis
+        dao.getPhotoForDay(midnight, tomorrowMidnight) != null
     }
 
     /** Captures a photo. Only saves to gallery + DB if color validation passes. */

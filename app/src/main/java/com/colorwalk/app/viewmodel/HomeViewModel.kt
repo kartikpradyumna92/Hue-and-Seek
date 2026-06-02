@@ -6,6 +6,7 @@ import com.colorwalk.app.data.repository.PhotoRepository
 import com.colorwalk.app.domain.WalkColor
 import com.colorwalk.app.domain.colorForDay
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -25,6 +26,8 @@ class HomeViewModel @Inject constructor(
     private val _state = MutableStateFlow(HomeUiState())
     val state: StateFlow<HomeUiState> = _state
 
+    private var loadJob: Job? = null
+
     init {
         // Show whatever is already in the DB immediately (fast path).
         load()
@@ -36,7 +39,8 @@ class HomeViewModel @Inject constructor(
     }
 
     fun load() {
-        viewModelScope.launch {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             val color = colorForDay(System.currentTimeMillis())
             val streak = repo.getStreak()
             val capturedToday = repo.hasCapturedToday()
