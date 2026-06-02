@@ -27,3 +27,6 @@ Thumbs.db
 
 # Heap dumps
 *.hprof
+
+# Local project notes — not for version control
+TODO.txt
