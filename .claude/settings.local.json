@@ -5,7 +5,8 @@
       "Bash(git add *)",
       "Bash(git commit -m 'Change validation to dominant color logic + fix home screen staleness *)",
       "Bash(git push *)",
-      "Bash(git commit -m 'Update CHANGELOG for v1.4.0 *)"
+      "Bash(git commit -m 'Update CHANGELOG for v1.4.0 *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
