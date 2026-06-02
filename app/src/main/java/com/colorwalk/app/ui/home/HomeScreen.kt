@@ -1,15 +1,19 @@
 package com.colorwalk.app.ui.home
 
+import android.app.Activity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,15 +21,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import com.colorwalk.app.domain.StreakCalculator
+import com.colorwalk.app.domain.colorForDay
+import com.colorwalk.app.notification.AlarmScheduler
+import com.colorwalk.app.notification.NotificationPrefs
 import com.colorwalk.app.viewmodel.HomeViewModel
+import com.google.android.play.core.review.ReviewManagerFactory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
@@ -52,6 +65,7 @@ private fun streakMessage(capturedToday: Boolean, streak: Int, colorName: String
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onOpenCamera: () -> Unit,
@@ -60,8 +74,9 @@ fun HomeScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val color = state.colorOfDay
+    val context = LocalContext.current
 
-    // Refresh capturedToday whenever the screen resumes (e.g. returning from camera)
+    // Refresh state whenever the screen resumes (e.g. returning from camera)
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -69,6 +84,22 @@ fun HomeScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // In-app review — fires once after first 7-day streak
+    val reviewManager = remember { ReviewManagerFactory.create(context) }
+    LaunchedEffect(state.shouldShowReview) {
+        if (state.shouldShowReview) {
+            try {
+                val reviewInfo = reviewManager.requestReviewFlow().await()
+                (context as? Activity)?.let { reviewManager.launchReviewFlow(it, reviewInfo).await() }
+            } catch (e: CancellationException) {
+                throw e  // cancellation must propagate — don't mark as shown; will retry next session
+            } catch (_: Exception) {
+                // Play review unavailable (debug build, sideload, etc.) — mark shown so we don't retry
+            }
+            viewModel.onReviewShown()
+        }
     }
 
     // Live clock — updates every minute
@@ -89,6 +120,33 @@ fun HomeScreen(
         animationSpec = tween(800),
         label = "colorAnim"
     )
+
+    // Notification time picker state
+    var showTimePicker by remember { mutableStateOf(false) }
+
+    if (showTimePicker) {
+        val timePickerState = rememberTimePickerState(
+            initialHour = NotificationPrefs.getHour(context),
+            initialMinute = NotificationPrefs.getMinute(context)
+        )
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+            modifier = Modifier.widthIn(min = 280.dp),
+            title = { Text("Daily reminder time") },
+            text = { TimePicker(state = timePickerState) },
+            confirmButton = {
+                TextButton(onClick = {
+                    NotificationPrefs.set(context, timePickerState.hour, timePickerState.minute)
+                    AlarmScheduler.scheduleDaily(context)
+                    showTimePicker = false
+                }) { Text("Set") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePicker = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -233,6 +291,11 @@ fun HomeScreen(
                 }
             }
 
+            Spacer(Modifier.height(12.dp))
+
+            // Past 14-day color history strip
+            ColorHistoryStrip(capturedDayIndices = state.capturedDayIndices, now = now)
+
             Spacer(Modifier.weight(1f))
 
             // Action buttons
@@ -264,6 +327,71 @@ fun HomeScreen(
             }
 
             Spacer(Modifier.height(32.dp))
+        }
+
+        // Settings gear — opens notification time picker
+        IconButton(
+            onClick = { showTimePicker = true },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(end = 8.dp)
+        ) {
+            Icon(
+                Icons.Default.Settings,
+                contentDescription = "Notification settings",
+                tint = Color.White.copy(alpha = 0.45f),
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ColorHistoryStrip(capturedDayIndices: Set<Int>, now: Long) {
+    // Keyed to `now` so the strip updates when the live clock crosses midnight
+    val todayIndex = remember(now) { StreakCalculator.epochMillisToDayIndex(now) }
+
+    // Pre-compute all 14 day timestamps once per day (not per item per recomposition)
+    val dayData = remember(todayIndex) {
+        (0..13).map { offset ->
+            val dayOffset = offset - 13
+            val millis = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 12) // noon — unambiguous across all timezones
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                add(Calendar.DAY_OF_YEAR, dayOffset)
+            }.timeInMillis
+            Pair(todayIndex + dayOffset, colorForDay(millis).composeColor)
+        }
+    }
+
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        contentPadding = PaddingValues(horizontal = 2.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        items(14) { offset ->
+            val (dayIndex, dayColor) = dayData[offset]
+            val captured = dayIndex in capturedDayIndices
+            val isToday = dayIndex == todayIndex
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.width(20.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(if (captured) dayColor else dayColor.copy(alpha = 0.18f))
+                        .then(
+                            if (isToday) Modifier.border(1.5.dp, Color.White.copy(alpha = 0.7f), CircleShape)
+                            else Modifier
+                        )
+                )
+            }
         }
     }
 }

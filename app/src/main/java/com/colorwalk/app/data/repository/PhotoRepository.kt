@@ -45,6 +45,13 @@ class PhotoRepository @Inject constructor(
         StreakCalculator.compute(dao.getRecentPhotoDates())
     }
 
+    /** Day indices (local-tz) for all photos in the last 60 days — used by history strip and review check. */
+    suspend fun getCapturedDayIndices(): Set<Int> = withContext(Dispatchers.IO) {
+        dao.getRecentPhotoDates()
+            .map { StreakCalculator.epochMillisToDayIndex(it) }
+            .toHashSet()
+    }
+
     suspend fun hasCapturedToday(): Boolean = withContext(Dispatchers.IO) {
         val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)

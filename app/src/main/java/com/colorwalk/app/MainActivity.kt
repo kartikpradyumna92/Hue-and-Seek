@@ -1,6 +1,7 @@
 package com.colorwalk.app
 
 import android.Manifest
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -14,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import com.colorwalk.app.ui.camera.CameraScreen
 import com.colorwalk.app.ui.gallery.GalleryScreen
 import com.colorwalk.app.ui.home.HomeScreen
+import com.colorwalk.app.ui.onboarding.OnboardingScreen
 import com.colorwalk.app.ui.theme.ColorWalkTheme
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -25,11 +27,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         NotificationHelper.createChannel(this)
-        AlarmScheduler.scheduleDailyNoon(this)
+        AlarmScheduler.scheduleDaily(this)
+        val hasSeenOnboarding = getSharedPreferences("app_prefs", MODE_PRIVATE)
+            .getBoolean("onboarding_seen", false)
+
         setContent {
             ColorWalkTheme {
                 PermissionGate {
-                    AppNavigation()
+                    AppNavigation(hasSeenOnboarding)
                 }
             }
         }
@@ -51,9 +56,21 @@ private fun PermissionGate(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun AppNavigation() {
+private fun AppNavigation(hasSeenOnboarding: Boolean) {
     val navController = rememberNavController()
-    NavHost(navController, startDestination = "home") {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    NavHost(navController, startDestination = if (hasSeenOnboarding) "home" else "onboarding") {
+        composable("onboarding") {
+            OnboardingScreen(
+                onFinish = {
+                    context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                        .edit().putBoolean("onboarding_seen", true).apply()
+                    navController.navigate("home") {
+                        popUpTo("onboarding") { inclusive = true }
+                    }
+                }
+            )
+        }
         composable("home") {
             HomeScreen(
                 onOpenCamera = { navController.navigate("camera") },

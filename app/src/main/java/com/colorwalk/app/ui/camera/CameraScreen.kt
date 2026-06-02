@@ -1,6 +1,10 @@
 package com.colorwalk.app.ui.camera
 
+import android.Manifest
+import android.content.Intent
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -18,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FlipCameraAndroid
@@ -31,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -38,6 +44,9 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.colorwalk.app.viewmodel.CameraViewModel
 import com.colorwalk.app.viewmodel.CaptureState
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Executors
@@ -56,11 +65,22 @@ private val ZOOM_LEVELS = listOf(
     ZoomLevel("20×", 20f),
 )
 
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun CameraScreen(
     onBack: () -> Unit,
     viewModel: CameraViewModel = hiltViewModel()
 ) {
+    val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
+
+    if (!cameraPermission.status.isGranted) {
+        CameraPermissionDenied(
+            onRequestPermission = { cameraPermission.launchPermissionRequest() },
+            onBack = onBack
+        )
+        return
+    }
+
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val captureState by viewModel.captureState.collectAsState()
@@ -305,6 +325,99 @@ private fun bindCamera(
             Log.e("CameraScreen", "Bind failed", e)
         }
     }, ContextCompat.getMainExecutor(context))
+}
+
+@Composable
+private fun CameraPermissionDenied(
+    onRequestPermission: () -> Unit,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF121212))
+            .statusBarsPadding()
+    ) {
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier
+                .padding(8.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.08f))
+        ) {
+            Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 40.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.07f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.CameraAlt,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.5f),
+                    modifier = Modifier.size(44.dp)
+                )
+            }
+
+            Spacer(Modifier.height(28.dp))
+
+            Text(
+                "Camera access required",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                "Hue & Seek needs camera access to capture your daily color walk photos. Your photos are saved only to your device.",
+                fontSize = 14.sp,
+                color = Color.White.copy(alpha = 0.6f),
+                textAlign = TextAlign.Center,
+                lineHeight = 21.sp
+            )
+
+            Spacer(Modifier.height(36.dp))
+
+            Button(
+                onClick = onRequestPermission,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Text("Grant Access", fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                    )
+                },
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Text("Open Settings", color = Color.White, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
 }
 
 @Composable

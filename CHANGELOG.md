@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.6.0] - 2026-06-02
+
+### Added
+- **Onboarding** — first-time users see a 3-slide intro explaining the daily color concept, photo validation, and streak mechanics. Shown only once; Skip and Get Started both work correctly.
+- **Custom notification time** — tap the gear icon on the home screen to pick your daily reminder time. Previously hardcoded to noon; now remembers your preference across launches and device reboots.
+- **14-day color history strip** — a row of colored dots below the streak card shows the last 14 days at a glance. Filled = photo captured, dim = missed. Today is highlighted with a ring, and the strip updates automatically at midnight without needing to restart the app.
+- **Home screen widget** — add Hue & Seek to your home screen to see today's color and current streak at a glance without opening the app. Updates daily.
+- **In-app review prompt** — after your first 7-day streak the app asks for a Play Store rating. Shown once, tastefully timed, and silently skipped in debug/sideloaded builds.
+- **Camera permission denied screen** — if camera access is denied, the camera screen now shows a clear explanation with "Grant Access" and "Open Settings" buttons instead of silently breaking.
+
+### Fixed
+- **`hasCapturedToday` accepted future-timestamped photos** — a photo saved with a wrong device clock could set capturedToday=true for the rest of that day. Query now bounded to `[today midnight, tomorrow midnight)`.
+- **Rapid screen transitions could show stale streak** — `load()` launched a fire-and-forget coroutine on every call; a slower earlier call could overwrite a fresher result. Fixed with per-call job cancellation.
+- **14-day history strip showed wrong day past midnight** — `todayIndex` was frozen at first composition; now keyed to the live clock so the strip updates correctly when the day rolls over.
+
+---
+
 ## [1.5.0] - 2026-06-01
 
 ### Added

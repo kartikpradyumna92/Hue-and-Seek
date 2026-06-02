@@ -6,6 +6,7 @@ import android.content.Intent
 import com.colorwalk.app.data.db.AppDatabase
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.colorForDay
+import com.colorwalk.app.ui.widget.ColorWalkWidget
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,13 +22,16 @@ class StreakReminderReceiver : BroadcastReceiver() {
                 val dao = AppDatabase.getInstance(context).photoDao()
 
                 // Check if already captured today
-                val midnight = Calendar.getInstance().apply {
+                val cal = Calendar.getInstance().apply {
                     set(Calendar.HOUR_OF_DAY, 0)
                     set(Calendar.MINUTE, 0)
                     set(Calendar.SECOND, 0)
                     set(Calendar.MILLISECOND, 0)
-                }.timeInMillis
-                val capturedToday = dao.getPhotoForDay(midnight) != null
+                }
+                val midnight = cal.timeInMillis
+                cal.add(Calendar.DAY_OF_MONTH, 1)
+                val tomorrowMidnight = cal.timeInMillis
+                val capturedToday = dao.getPhotoForDay(midnight, tomorrowMidnight) != null
 
                 if (!capturedToday) {
                     val colorName = colorForDay(System.currentTimeMillis()).name
@@ -35,8 +39,11 @@ class StreakReminderReceiver : BroadcastReceiver() {
                     NotificationHelper.showReminder(context, colorName, streak)
                 }
 
+                // Refresh widget for the new day
+                ColorWalkWidget.requestUpdate(context)
+
                 // Reschedule for tomorrow
-                AlarmScheduler.scheduleDailyNoon(context)
+                AlarmScheduler.scheduleDaily(context)
             } finally {
                 pendingResult.finish()
             }

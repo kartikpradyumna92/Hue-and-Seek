@@ -10,7 +10,10 @@ object AlarmScheduler {
 
     private const val REQUEST_CODE = 2001
 
-    fun scheduleDailyNoon(context: Context) {
+    fun scheduleDaily(context: Context) {
+        val hour = NotificationPrefs.getHour(context)
+        val minute = NotificationPrefs.getMinute(context)
+
         val alarmManager = context.getSystemService(AlarmManager::class.java)
 
         val intent = PendingIntent.getBroadcast(
@@ -20,10 +23,9 @@ object AlarmScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Set trigger for today's noon; if noon already passed, schedule for tomorrow
-        val noon = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 12)
-            set(Calendar.MINUTE, 0)
+        val trigger = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
             if (timeInMillis <= System.currentTimeMillis()) {
@@ -31,14 +33,17 @@ object AlarmScheduler {
             }
         }
 
-        // setWindow fires within a 15-min window around noon — no special permission needed
+        // setWindow fires within a ±7 min window — no exact-alarm permission needed
         alarmManager.setWindow(
             AlarmManager.RTC_WAKEUP,
-            noon.timeInMillis - 7 * 60 * 1000L,   // start: 11:53 AM
-            15 * 60 * 1000L,                        // window: 15 minutes
+            trigger.timeInMillis - 7 * 60 * 1000L,
+            15 * 60 * 1000L,
             intent
         )
     }
+
+    @Deprecated("Use scheduleDaily which reads user preference", ReplaceWith("scheduleDaily(context)"))
+    fun scheduleDailyNoon(context: Context) = scheduleDaily(context)
 
     fun cancel(context: Context) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)

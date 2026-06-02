@@ -73,4 +73,6 @@ dependencies {
     implementation(libs.coroutines.play.services)
     implementation(libs.datastore)
     implementation(libs.accompanist.permissions)
+    implementation(libs.glance.appwidget)
+    implementation(libs.play.review)
 }
