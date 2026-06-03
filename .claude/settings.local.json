@@ -6,7 +6,15 @@
       "Bash(git commit -m 'Change validation to dominant color logic + fix home screen staleness *)",
       "Bash(git push *)",
       "Bash(git commit -m 'Update CHANGELOG for v1.4.0 *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Read(//private/tmp/**)",
+      "Bash(jar tf *)",
+      "Bash(# Check the Kotlin stdlib sources for CancellationException definition *)",
+      "Read(//Users/karteekpbulusu/.gradle/**)",
+      "Bash(unzip -p ~/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/1.9.22/d1b45176c0aeb15a309a4f4a7cd160d4b3c8b733/kotlin-stdlib-1.9.22-sources.jar \"kotlin/coroutines/cancellation/CancellationException.kt\")",
+      "Bash(unzip -p ~/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/1.9.22/d1b45176c0aeb15a309a4f4a7cd160d4b3c8b733/kotlin-stdlib-1.9.22-sources.jar)",
+      "Bash(python3 -c ' *)",
+      "Bash(unzip -p ~/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/1.8.1/de8e46286026b0249acd5db040effcae1188c6e9/kotlinx-coroutines-core-jvm-1.8.1-sources.jar)"
     ]
   }
 }
