@@ -43,8 +43,10 @@ class StreakReminderReceiver : BroadcastReceiver() {
                 // Refresh widget for the new day
                 ColorWalkWidget.requestUpdate(context)
 
-                // Reschedule for tomorrow
-                AlarmScheduler.scheduleDaily(context)
+                // Reschedule for tomorrow only if still enabled
+                if (NotificationPrefs.isEnabled(context)) {
+                    AlarmScheduler.scheduleDaily(context)
+                }
             } finally {
                 pendingResult.finish()
             }

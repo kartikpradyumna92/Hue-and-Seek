@@ -63,33 +63,41 @@ class PhotoRepository @Inject constructor(
         dao.getPhotoForDay(midnight, tomorrowMidnight) != null
     }
 
-    /** Captures a photo. Only saves to gallery + DB if color validation passes. */
+    /** Captures a photo. Only saves if color validation passes. */
     suspend fun savePhoto(bitmap: Bitmap, targetColor: WalkColor): SaveResult =
         withContext(Dispatchers.IO) {
             val validation = ColorValidator.validate(bitmap, targetColor)
-
-            // Reject before touching storage
             if (!validation.passed) return@withContext SaveResult.ValidationFailed(validation)
 
-            val uri = saveBitmapToGallery(bitmap) ?: return@withContext SaveResult.StorageError
+            val now = System.currentTimeMillis()
+            // Include millis so two captures in the same second never share a filename.
+            val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(now))}_${now % 1000}.jpg"
+
+            // Primary: save to app-private files dir — always readable without permissions.
+            val privateFile = saveToPrivateStorage(bitmap, filename)
+                ?: return@withContext SaveResult.StorageError
+
+            // Secondary: also publish to the system gallery (best-effort; display doesn't depend on this).
+            publishToSystemGallery(bitmap, filename, now)
+
             val (lat, lon) = getLastLocation()
             val locationName = reverseGeocode(lat, lon)
             dao.insert(
                 PhotoEntity(
-                    filePath = uri.toString(),
+                    filePath = privateFile.absolutePath,   // absolute path — passed as File to Coil
                     colorName = targetColor.name,
                     colorHex = targetColor.hex,
-                    dateTaken = System.currentTimeMillis(),
+                    dateTaken = now,
                     latitude = lat,
                     longitude = lon,
                     locationName = locationName,
                     dominantColorHex = validation.dominantHex
                 )
             )
-            SaveResult.Success(uri, validation)
+            SaveResult.Success(Uri.fromFile(privateFile), validation)
         }
 
-    /** Imports a photo from device gallery. Only indexes in DB if taken today + color passes. */
+    /** Imports a photo from device gallery. Only indexes if taken today + color passes. */
     suspend fun importPhoto(uri: Uri, targetColor: WalkColor): ImportResult =
         withContext(Dispatchers.IO) {
             val dateTaken = readPhotoDate(uri) ?: return@withContext ImportResult.NoDateMetadata
@@ -97,14 +105,18 @@ class PhotoRepository @Inject constructor(
 
             val bitmap = decodeBitmapFromUri(uri) ?: return@withContext ImportResult.StorageError
             val validation = ColorValidator.validate(bitmap, targetColor)
-
             if (!validation.passed) return@withContext ImportResult.ValidationFailed(validation)
+
+            // Photo picker URIs are temporary — copy to private storage so display always works.
+            val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(dateTaken))}.jpg"
+            val privateFile = saveToPrivateStorage(bitmap, filename)
+                ?: return@withContext ImportResult.StorageError
 
             val (lat, lon) = readPhotoLocation(uri)
             val locationName = reverseGeocode(lat, lon)
             dao.insert(
                 PhotoEntity(
-                    filePath = uri.toString(),
+                    filePath = privateFile.absolutePath,
                     colorName = targetColor.name,
                     colorHex = targetColor.hex,
                     dateTaken = dateTaken,
@@ -114,15 +126,51 @@ class PhotoRepository @Inject constructor(
                     dominantColorHex = validation.dominantHex
                 )
             )
-            ImportResult.Success(uri, validation)
+            ImportResult.Success(Uri.fromFile(privateFile), validation)
         }
 
     /**
-     * Scans MediaStore for ColorWalk photos and inserts any that aren't already in the DB.
-     * Runs on startup so a reinstall (which wipes the DB) automatically recovers the gallery
-     * and streak from photos already saved to the device gallery.
+     * Syncs MediaStore with the local DB on startup.
+     *
+     * Pass 1 — direct migration: for every DB row still pointing at a content:// URI,
+     * open that URI directly (the app owns it so no extra permission needed) and copy
+     * the bytes to private storage. This is the reliable path for update installs.
+     *
+     * Pass 2 — MediaStore scan: query for ColorWalk files to recover photos after a
+     * fresh reinstall (new UID, no implicit content:// access). Wrapped in try/catch so
+     * a SecurityException (READ_MEDIA_IMAGES denied) never silently kills the whole sync.
      */
     suspend fun syncGalleryWithDatabase() = withContext(Dispatchers.IO) {
+
+        // ── Pass 1: directly migrate content:// URIs already stored in the DB ────────
+        val allDbPhotos = dao.getAllPhotosSnapshot()
+        for (photo in allDbPhotos) {
+            val uri = Uri.parse(photo.filePath)
+            if (uri.scheme != "content") continue          // already file:// — skip
+
+            val dest = File(context.filesDir, "photos/photo_${photo.id}.jpg")
+                .also { it.parentFile?.mkdirs() }
+
+            if (dest.exists() && dest.length() > 0L) {
+                // Already copied on a previous run — just point the DB row here.
+                dao.updateFilePath(photo.id, dest.absolutePath)
+                continue
+            }
+
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(dest).use { input.copyTo(it) }
+                }
+                if (dest.exists() && dest.length() > 0L) {
+                    dao.updateFilePath(photo.id, dest.absolutePath)
+                }
+            } catch (_: Exception) {
+                // URI no longer accessible (e.g. fresh reinstall with different UID).
+                // Pass 2 will attempt recovery via the MediaStore query.
+            }
+        }
+
+        // ── Pass 2: MediaStore scan — recovery for fresh reinstalls ─────────────────
         val existingDays = dao.getAllPhotoDates()
             .map { StreakCalculator.epochMillisToDayIndex(it) }
             .toHashSet()
@@ -133,38 +181,55 @@ class PhotoRepository @Inject constructor(
             "${MediaStore.Images.Media.DATA} LIKE ?"
         }
 
-        context.contentResolver.query(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.DISPLAY_NAME),
-            selection,
-            arrayOf("%ColorWalk%"),
-            null
-        )?.use { cursor ->
-            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
-            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+        val cursor = try {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.DISPLAY_NAME),
+                selection,
+                arrayOf("%ColorWalk%"),
+                null
+            )
+        } catch (_: Exception) {
+            null   // SecurityException if READ_MEDIA_IMAGES denied — skip Pass 2 gracefully
+        }
 
-            while (cursor.moveToNext()) {
-                val name = cursor.getString(nameCol) ?: continue
+        cursor?.use { c ->
+            val idCol   = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val dateCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+            val nameCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+
+            while (c.moveToNext()) {
+                val name = c.getString(nameCol) ?: continue
                 if (!name.startsWith("ColorWalk_")) continue
 
-                var dateTaken = cursor.getLong(dateCol)
+                var dateTaken = c.getLong(dateCol)
                 if (dateTaken < 1_000_000_000_000L) {
-                    // DATE_TAKEN is 0 or in seconds (pre-Q OEM quirk): fall back to
-                    // the timestamp encoded in the filename (ColorWalk_yyyyMMdd_HHmmss.jpg).
                     dateTaken = parseDateFromFilename(name) ?: continue
                 }
 
                 val day = StreakCalculator.epochMillisToDayIndex(dateTaken)
-                if (day in existingDays) continue
+                val mediaId = c.getLong(idCol)
+                val mediaUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId)
 
-                val mediaId = cursor.getLong(idCol)
-                val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId)
+                if (day in existingDays) {
+                    val cal = Calendar.getInstance().apply {
+                        timeInMillis = dateTaken
+                        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                    }
+                    val midnight = cal.timeInMillis
+                    val tomorrowMidnight = midnight + 24 * 60 * 60 * 1000L
+                    val existingId = dao.getPhotoIdForDay(midnight, tomorrowMidnight)
+                    if (existingId != null) migrateToPrivateStorage(existingId, name, mediaUri)
+                    continue
+                }
+
+                // New day (fresh-reinstall recovery) — copy to private storage and insert.
+                val privateFile = copyMediaUriToPrivateStorage(name, mediaUri)
                 val color = colorForDay(dateTaken)
-
                 dao.insert(
                     PhotoEntity(
-                        filePath = uri.toString(),
+                        filePath = privateFile?.absolutePath ?: mediaUri.toString(),
                         colorName = color.name,
                         colorHex = color.hex,
                         dateTaken = dateTaken,
@@ -179,10 +244,16 @@ class PhotoRepository @Inject constructor(
         }
     }
 
-    /** Deletes a photo from both the app DB and the device gallery. */
+    /** Deletes a photo from the app DB and storage (private file or MediaStore). */
     suspend fun deletePhoto(photo: PhotoEntity) = withContext(Dispatchers.IO) {
         try {
-            context.contentResolver.delete(Uri.parse(photo.filePath), null, null)
+            val uri = Uri.parse(photo.filePath)
+            if (uri.scheme == "file") {
+                val path = uri.path
+                if (path != null) File(path).delete()
+            } else {
+                context.contentResolver.delete(uri, null, null)
+            }
         } catch (_: Exception) {}
         dao.deleteById(photo.id)
     }
@@ -190,35 +261,72 @@ class PhotoRepository @Inject constructor(
     // ── private helpers ──────────────────────────────────────────────────────
 
     private fun parseDateFromFilename(name: String): Long? = try {
-        // Filename: ColorWalk_yyyyMMdd_HHmmss.jpg — date is always encoded here.
         val stem = name.removePrefix("ColorWalk_").removeSuffix(".jpg")
         SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(stem)?.time
     } catch (_: Exception) { null }
 
-    private fun saveBitmapToGallery(bitmap: Bitmap): Uri? {
-        val now = System.currentTimeMillis()
-        val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(now))}.jpg"
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val cv = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, filename)
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ColorWalk")
-                put(MediaStore.Images.Media.DATE_TAKEN, now)
-                put(MediaStore.Images.Media.IS_PENDING, 1)
+    /** Saves a bitmap to the app's private files directory. Always succeeds or returns null. */
+    private fun saveToPrivateStorage(bitmap: Bitmap, filename: String): File? = try {
+        val dir = File(context.filesDir, "photos").also { it.mkdirs() }
+        val file = File(dir, filename)
+        FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+        file
+    } catch (_: Exception) { null }
+
+    /**
+     * Publishes a copy of the photo to the system gallery (MediaStore) for visibility
+     * in the Photos app. This is best-effort — the app's display doesn't depend on it.
+     */
+    private fun publishToSystemGallery(bitmap: Bitmap, filename: String, now: Long) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val cv = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ColorWalk")
+                    put(MediaStore.Images.Media.DATE_TAKEN, now)
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return
+                resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                cv.clear(); cv.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(uri, cv, null, null)
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "ColorWalk")
+                dir.mkdirs()
+                FileOutputStream(File(dir, filename)).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
             }
-            val resolver = context.contentResolver
-            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return null
-            resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-            cv.clear(); cv.put(MediaStore.Images.Media.IS_PENDING, 0)
-            resolver.update(uri, cv, null, null)
-            uri
-        } else {
-            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "ColorWalk")
-            dir.mkdirs()
-            val file = File(dir, filename)
-            FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-            Uri.fromFile(file)
-        }
+        } catch (_: Exception) { /* best-effort — never block the capture flow */ }
+    }
+
+    /**
+     * Copies a MediaStore URI's bytes to private storage.
+     * Used during sync to make existing photos available without permission complications.
+     * Returns null (silently) if the URI can't be read — caller keeps the content:// URI.
+     */
+    private fun copyMediaUriToPrivateStorage(filename: String, mediaUri: Uri): File? {
+        return try {
+            val dir = File(context.filesDir, "photos").also { it.mkdirs() }
+            val dest = File(dir, filename)
+            if (dest.exists() && dest.length() > 0L) return dest
+            context.contentResolver.openInputStream(mediaUri)?.use { input ->
+                FileOutputStream(dest).use { input.copyTo(it) }
+            }
+            if (dest.exists() && dest.length() > 0L) dest else null
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * Migrates a DB entry whose filePath may be a stale content:// URI to a private file.
+     * If the copy succeeds, updates the DB row so Coil can always load it.
+     * Silent no-op on any failure — existing filePath is kept.
+     */
+    private suspend fun migrateToPrivateStorage(photoId: Long, filename: String, mediaUri: Uri) {
+        // copyMediaUriToPrivateStorage already handles the "already exists" check internally,
+        // so no separate exist check is needed here — avoids the TOCTOU race condition.
+        val privateFile = copyMediaUriToPrivateStorage(filename, mediaUri) ?: return
+        try { dao.updateFilePath(photoId, privateFile.absolutePath) } catch (_: Exception) { }
     }
 
     private fun readPhotoDate(uri: Uri): Long? {

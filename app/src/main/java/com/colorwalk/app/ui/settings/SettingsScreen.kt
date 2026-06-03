@@ -54,11 +54,17 @@ fun SettingsScreen(
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
+    // Surface (not a background modifier) so LocalContentColor is set to onBackground —
+    // all child Text/Icon composables then auto-adapt their color to the selected theme.
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
     ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
         // Top bar
         Row(
             modifier = Modifier
@@ -67,7 +73,11 @@ fun SettingsScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                Icon(
+                    Icons.Default.ArrowBack,
+                    contentDescription = "Back",
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
             }
             Text(
                 "Settings",
@@ -166,6 +176,7 @@ fun SettingsScreen(
             }
         }
     }
+    } // Surface
 }
 
 @Composable

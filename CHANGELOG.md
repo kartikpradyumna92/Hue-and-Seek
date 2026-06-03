@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.8.0] - 2026-06-03
+
+### Fixed
+- **Gallery photos showing as pink/blank tiles** — Coil was given a raw `file://` URI string, which is parsed differently across OEM Android variants (symlink path mismatch between `/data/data/` and `/data/user/0/`). Photos are now stored as bare absolute paths and loaded via a typed `File` object; legacy `content://` entries are handled via `Uri.parse()`. Photos now display reliably on all devices.
+- **Streak and photos lost on reinstall** — the permissions screen called `goHome()` immediately after launching the OS permission dialogs, so `syncGalleryWithDatabase()` ran before `READ_MEDIA_IMAGES` was granted. The MediaStore query silently returned nothing, meaning no photos were recovered and the streak appeared as zero. Navigation to home now fires only after every permission dialog is answered, so the gallery sync always runs with the correct permissions and fully recovers streak data.
+- **Permissions screen skipped on update installs** — the `permissions_requested` flag in SharedPreferences survived update installs (e.g. Android Studio deploy), so returning users who had never granted camera access were sent straight to the home screen. Start destination now checks the actual OS camera grant status, not the flag.
+- **Streak reminder notification missed in Doze mode** — `setWindow()` is deferred by Android's Doze battery optimisation, causing the 10 AM reminder to fire hours late or not at all. Changed to `setExactAndAllowWhileIdle()` with the `USE_EXACT_ALARM` permission (API 33+, auto-granted) so the alarm fires precisely at the scheduled time even when the device is idle.
+- **Settings screen icons invisible in light mode** — `Column` with `.background()` modifier does not propagate `LocalContentColor` to children, so icons inherited the wrong color. Wrapped in `Surface` which sets both background color and content color correctly.
+- **Silent data loss on database schema change** — `fallbackToDestructiveMigration()` was wiping the entire Room database (streak + all photo metadata) whenever the schema changed without a migration. Removed; the app now crashes loudly instead of silently destroying user data. Schema changes require an explicit `Migration` object going forward. `exportSchema = true` also enabled so schema diffs are tracked in version control.
+- **Camera rebound on every zoom tap** — `AndroidView`'s `update` block captured `activeZoom`, triggering a full `unbindAll()` + camera rebind on every zoom change. Wrapped in `key(cameraSelector)` so the camera only rebinds when the user flips front/back; zoom is applied exclusively via `LaunchedEffect(activeZoom)` on the already-bound camera.
+
+### Added
+- **105 unit tests** — full JVM test suite covering streak calculation (17 tests), color-of-day determinism (9 tests), color validation, HomeViewModel (12 tests), GalleryViewModel (14 tests), CameraViewModel (9 tests), and NotificationPrefs (16 tests). Android stubs return defaults in JVM tests via `unitTests.isReturnDefaultValues = true`. Instrumented Room and repository integration tests also added.
+- **Gradle wrapper** — `gradlew` and `gradle-wrapper.jar` added to the repository so tests and builds can be run from the command line without relying on Android Studio.
+
+---
+
 ## [1.7.0] - 2026-06-02
 
 ### Added

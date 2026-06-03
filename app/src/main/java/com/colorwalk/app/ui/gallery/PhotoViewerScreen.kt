@@ -1,6 +1,5 @@
 package com.colorwalk.app.ui.gallery
 
-import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -21,11 +20,15 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.Uri
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.colorwalk.app.data.db.PhotoEntity
+import java.io.File as JavaFile
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -72,6 +75,7 @@ fun PhotoViewerScreen(
             .background(Color.Black)
     ) {
         // Pure pager — NO gesture modifiers on pages so swipe is never intercepted
+        val context = LocalContext.current
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
@@ -84,7 +88,10 @@ fun PhotoViewerScreen(
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = Uri.parse(photos[page].filePath),
+                    model = ImageRequest.Builder(context)
+                        .data(photos[page].filePath.let { p -> if (p.startsWith("/")) JavaFile(p) else Uri.parse(p) })
+                        .crossfade(true)
+                        .build(),
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier

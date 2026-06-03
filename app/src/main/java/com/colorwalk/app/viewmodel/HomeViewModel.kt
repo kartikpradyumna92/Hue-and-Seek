@@ -43,7 +43,11 @@ class HomeViewModel @Inject constructor(
     init {
         load()
         viewModelScope.launch {
-            repo.syncGalleryWithDatabase()
+            try {
+                repo.syncGalleryWithDatabase()
+            } catch (e: Exception) {
+                android.util.Log.e("HomeViewModel", "Gallery sync failed", e)
+            }
             load(fromSync = true)
         }
     }

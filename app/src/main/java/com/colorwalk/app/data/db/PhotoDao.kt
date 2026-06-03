@@ -29,6 +29,15 @@ interface PhotoDao {
     @Query("SELECT dateTaken FROM photos")
     suspend fun getAllPhotoDates(): List<Long>
 
+    @Query("SELECT id FROM photos WHERE dateTaken >= :midnightMs AND dateTaken < :tomorrowMidnightMs LIMIT 1")
+    suspend fun getPhotoIdForDay(midnightMs: Long, tomorrowMidnightMs: Long): Long?
+
+    @Query("UPDATE photos SET filePath = :newPath WHERE id = :id")
+    suspend fun updateFilePath(id: Long, newPath: String)
+
+    @Query("SELECT * FROM photos")
+    suspend fun getAllPhotosSnapshot(): List<PhotoEntity>
+
     @Query("DELETE FROM photos WHERE id = :id")
     suspend fun deleteById(id: Long)
 }

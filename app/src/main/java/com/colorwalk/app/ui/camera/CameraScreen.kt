@@ -103,25 +103,24 @@ fun CameraScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
 
-        AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).also { previewView ->
-                    bindCamera(ctx, lifecycleOwner, previewView, cameraSelector) { cap, cam ->
-                        imageCapture = cap; camera = cam
+        // key(cameraSelector) destroys and recreates the AndroidView only when the user
+        // flips between front/back — not on every recomposition (zoom taps, state changes, etc.).
+        // No update block needed: factory handles the bind, LaunchedEffect handles zoom.
+        key(cameraSelector) {
+            AndroidView(
+                factory = { ctx ->
+                    PreviewView(ctx).also { previewView ->
+                        bindCamera(ctx, lifecycleOwner, previewView, cameraSelector) { cap, cam ->
+                            imageCapture = cap; camera = cam
+                        }
                     }
-                }
-            },
-            update = { previewView ->
-                // Only rebind when camera selector changes (front/back switch).
-                // Zoom is applied separately via LaunchedEffect to avoid unbindAll on every zoom tap.
-                bindCamera(context, lifecycleOwner, previewView, cameraSelector) { cap, cam ->
-                    imageCapture = cap; camera = cam
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
-        // Apply zoom without rebinding the camera
+        // Apply zoom without rebinding the camera.
+        // Only LaunchedEffect triggers applyZoom — onClick just updates activeZoom.
         LaunchedEffect(activeZoom) {
             camera?.let { applyZoom(it, activeZoom) }
         }
@@ -192,10 +191,7 @@ fun CameraScreen(
                             )
                     ) {
                         TextButton(
-                            onClick = {
-                                activeZoom = level.ratio
-                                applyZoom(camera, level.ratio)
-                            },
+                            onClick = { activeZoom = level.ratio },
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(0.dp)
                         ) {

@@ -22,12 +22,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import android.net.Uri
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.colorwalk.app.data.db.ColorSummary
+import java.io.File as JavaFile
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.viewmodel.GalleryViewMode
 import com.colorwalk.app.viewmodel.GalleryViewModel
@@ -215,6 +219,7 @@ private fun DatePhotoRow(photo: PhotoEntity, onDelete: () -> Unit, onOpen: () ->
         )
     }
 
+    val context = LocalContext.current
     Card(
         onClick = onOpen,
         shape = RoundedCornerShape(12.dp),
@@ -223,13 +228,17 @@ private fun DatePhotoRow(photo: PhotoEntity, onDelete: () -> Unit, onOpen: () ->
     ) {
         Row(modifier = Modifier.height(88.dp), verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
-                model = android.net.Uri.parse(photo.filePath),
+                model = ImageRequest.Builder(context)
+                    .data(if (photo.filePath.startsWith("/")) JavaFile(photo.filePath) else Uri.parse(photo.filePath))
+                    .crossfade(true)
+                    .build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .width(88.dp)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
+                    .background(accentColor.copy(alpha = 0.15f))
             )
             Column(
                 modifier = Modifier

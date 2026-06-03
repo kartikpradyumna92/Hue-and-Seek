@@ -14,14 +14,17 @@ android {
         applicationId = "com.colorwalk.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.7.0"
+        versionCode = 3
+        versionName = "1.8.0"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
         }
+    }
+    testOptions {
+        unitTests.isReturnDefaultValues = true   // Android stubs (Log, etc.) return defaults instead of throwing
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -32,6 +35,18 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
+    }
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/LICENSE.md",
+                "META-INF/LICENSE-notice.md",
+                "META-INF/NOTICE.md",
+            )
+        }
     }
 }
 
@@ -76,4 +91,20 @@ dependencies {
     implementation(libs.glance.appwidget)
     implementation(libs.play.review)
     implementation(libs.konfetti.compose)
+
+    // Unit test dependencies
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("io.mockk:mockk:1.13.9")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("app.cash.turbine:turbine:1.1.0")
+    testImplementation("androidx.arch.core:core-testing:2.2.0")
+
+    // Instrumented test dependencies
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.room:room-testing:2.6.1")
+    androidTestImplementation("io.mockk:mockk-android:1.13.9")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    androidTestImplementation("app.cash.turbine:turbine:1.1.0")
+    androidTestImplementation("androidx.arch.core:core-testing:2.2.0")
 }

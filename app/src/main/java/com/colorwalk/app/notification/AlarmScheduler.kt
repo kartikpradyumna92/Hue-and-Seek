@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import java.util.Calendar
 
 object AlarmScheduler {
@@ -33,13 +34,32 @@ object AlarmScheduler {
             }
         }
 
-        // setWindow fires within a ±7 min window — no exact-alarm permission needed
-        alarmManager.setWindow(
-            AlarmManager.RTC_WAKEUP,
-            trigger.timeInMillis - 7 * 60 * 1000L,
-            15 * 60 * 1000L,
-            intent
-        )
+        // On API 31+, exact alarms require SCHEDULE_EXACT_ALARM / USE_EXACT_ALARM.
+        // On API 33+ with USE_EXACT_ALARM declared, canScheduleExactAlarms() returns true automatically.
+        // Pre-API 31: setExactAndAllowWhileIdle works without any permission.
+        // setWindow (inexact) gets deferred in Doze mode and can silently miss the window.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    trigger.timeInMillis,
+                    intent
+                )
+            } else {
+                alarmManager.setWindow(
+                    AlarmManager.RTC_WAKEUP,
+                    trigger.timeInMillis - 7 * 60 * 1000L,
+                    15 * 60 * 1000L,
+                    intent
+                )
+            }
+        } else {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                trigger.timeInMillis,
+                intent
+            )
+        }
     }
 
     @Deprecated("Use scheduleDaily which reads user preference", ReplaceWith("scheduleDaily(context)"))

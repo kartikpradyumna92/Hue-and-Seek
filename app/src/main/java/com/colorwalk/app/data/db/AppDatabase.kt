@@ -5,7 +5,9 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [PhotoEntity::class], version = 1, exportSchema = false)
+// SCHEMA CHANGE RULE: increment `version` + add a Migration object below.
+// Never use fallbackToDestructiveMigration — it silently wipes all user data (streak + photos).
+@Database(entities = [PhotoEntity::class], version = 1, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
 
@@ -18,7 +20,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "colorwalk.db"
-                ).fallbackToDestructiveMigration().build().also { INSTANCE = it }
+                )
+                // Add Migration(oldVer, newVer) { ... } objects here on every schema change.
+                .build().also { INSTANCE = it }
             }
     }
 }

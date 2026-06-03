@@ -333,8 +333,8 @@ fun HomeScreen(
             Icon(
                 Icons.Default.Settings,
                 contentDescription = "Notification settings",
-                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
-                modifier = Modifier.size(22.dp)
+                tint = Color.White,
+                modifier = Modifier.size(28.dp)
             )
         }
     }
