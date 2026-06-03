@@ -7,17 +7,18 @@ import com.colorwalk.app.data.db.AppDatabase
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.colorForDay
 import com.colorwalk.app.ui.widget.ColorWalkWidget
-import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
 class StreakReminderReceiver : BroadcastReceiver() {
 
+    @OptIn(DelicateCoroutinesApi::class)
     override fun onReceive(context: Context, intent: Intent) {
         val pendingResult = goAsync()
-        CoroutineScope(Dispatchers.IO).launch {
+        GlobalScope.launch(Dispatchers.IO) {
             try {
                 val dao = AppDatabase.getInstance(context).photoDao()
 

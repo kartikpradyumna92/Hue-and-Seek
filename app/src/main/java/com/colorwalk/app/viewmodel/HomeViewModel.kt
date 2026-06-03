@@ -15,12 +15,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+sealed class CelebrationState {
+    object Daily : CelebrationState()
+    data class Milestone(val days: Int) : CelebrationState()
+}
+
 data class HomeUiState(
     val colorOfDay: WalkColor? = null,
     val streak: Int = 0,
     val capturedToday: Boolean = false,
     val capturedDayIndices: Set<Int> = emptySet(),
-    val shouldShowReview: Boolean = false
+    val shouldShowReview: Boolean = false,
+    val celebrationState: CelebrationState? = null
 )
 
 @HiltViewModel
@@ -35,40 +41,61 @@ class HomeViewModel @Inject constructor(
     private var loadJob: Job? = null
 
     init {
-        // Show whatever is already in the DB immediately (fast path).
         load()
-        // Then rebuild any records wiped by a reinstall in the background and refresh.
         viewModelScope.launch {
             repo.syncGalleryWithDatabase()
-            load()
+            load(fromSync = true)
         }
     }
 
-    fun load() {
+    fun load(fromSync: Boolean = false) {
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
+            val prevCaptured = _state.value.capturedToday
             val color = colorForDay(System.currentTimeMillis())
             val streak = repo.getStreak()
             val capturedDayIndices = repo.getCapturedDayIndices()
-            // Derive capturedToday from the already-fetched set — saves a redundant DB query
             val todayIndex = StreakCalculator.epochMillisToDayIndex(System.currentTimeMillis())
             val capturedToday = todayIndex in capturedDayIndices
-            val reviewNotYetShown = !context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                .getBoolean("review_shown", false)
+
+            val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            val reviewNotYetShown = !prefs.getBoolean("review_shown", false)
+            val lastCelebDay = prefs.getInt("last_celebration_day", -1)
+
+            // Celebrate when capturedToday transitions false→true, once per calendar day.
+            // fromSync loads never trigger confetti (reinstall recovery shouldn't celebrate).
+            val celebration = when {
+                !fromSync && capturedToday && !prevCaptured && lastCelebDay != todayIndex ->
+                    if (streak in MILESTONE_STREAKS) CelebrationState.Milestone(streak)
+                    else CelebrationState.Daily
+                else -> null
+            }
+
             _state.value = HomeUiState(
                 colorOfDay = color,
                 streak = streak,
                 capturedToday = capturedToday,
                 capturedDayIndices = capturedDayIndices,
-                shouldShowReview = streak >= 7 && reviewNotYetShown
+                shouldShowReview = streak >= 7 && reviewNotYetShown,
+                celebrationState = celebration
             )
         }
+    }
+
+    fun onCelebrationDone() {
+        val todayIndex = StreakCalculator.epochMillisToDayIndex(System.currentTimeMillis())
+        context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            .edit().putInt("last_celebration_day", todayIndex).apply()
+        _state.value = _state.value.copy(celebrationState = null)
     }
 
     fun onReviewShown() {
         context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
             .edit().putBoolean("review_shown", true).apply()
-        // Clear the flag from state without re-running the full load
         _state.value = _state.value.copy(shouldShowReview = false)
+    }
+
+    companion object {
+        val MILESTONE_STREAKS = setOf(7, 21, 30, 50, 100, 150, 180, 200, 240, 300, 365)
     }
 }

@@ -1,8 +1,13 @@
 package com.colorwalk.app.ui.home
 
 import android.app.Activity
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -21,21 +26,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.colorForDay
-import com.colorwalk.app.notification.AlarmScheduler
-import com.colorwalk.app.notification.NotificationPrefs
+import com.colorwalk.app.viewmodel.CelebrationState
 import com.colorwalk.app.viewmodel.HomeViewModel
+import nl.dionsegijn.konfetti.compose.KonfettiView
+import nl.dionsegijn.konfetti.compose.OnParticleSystemUpdateListener
+import nl.dionsegijn.konfetti.core.Party
+import nl.dionsegijn.konfetti.core.PartySystem
+import nl.dionsegijn.konfetti.core.Position
+import nl.dionsegijn.konfetti.core.emitter.Emitter
+import java.util.concurrent.TimeUnit
 import com.google.android.play.core.review.ReviewManagerFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.tasks.await
@@ -65,11 +76,11 @@ private fun streakMessage(capturedToday: Boolean, streak: Int, colorName: String
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onOpenCamera: () -> Unit,
     onOpenGallery: () -> Unit,
+    onOpenSettings: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -121,39 +132,12 @@ fun HomeScreen(
         label = "colorAnim"
     )
 
-    // Notification time picker state
-    var showTimePicker by remember { mutableStateOf(false) }
-
-    if (showTimePicker) {
-        val timePickerState = rememberTimePickerState(
-            initialHour = NotificationPrefs.getHour(context),
-            initialMinute = NotificationPrefs.getMinute(context)
-        )
-        AlertDialog(
-            onDismissRequest = { showTimePicker = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
-            modifier = Modifier.widthIn(min = 280.dp),
-            title = { Text("Daily reminder time") },
-            text = { TimePicker(state = timePickerState) },
-            confirmButton = {
-                TextButton(onClick = {
-                    NotificationPrefs.set(context, timePickerState.hour, timePickerState.minute)
-                    AlarmScheduler.scheduleDaily(context)
-                    showTimePicker = false
-                }) { Text("Set") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTimePicker = false }) { Text("Cancel") }
-            }
-        )
-    }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(animatedColor.copy(alpha = 0.25f), Color(0xFF121212))
+                    listOf(animatedColor.copy(alpha = 0.25f), MaterialTheme.colorScheme.background)
                 )
             )
     ) {
@@ -186,19 +170,19 @@ fun HomeScreen(
                     dayName,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color.White.copy(alpha = 0.5f),
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
                     letterSpacing = 2.sp
                 )
                 Text(
                     dateStr,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.85f)
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
                 )
                 Text(
                     timeStr,
                     fontSize = 13.sp,
-                    color = Color.White.copy(alpha = 0.4f)
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                 )
             }
 
@@ -207,7 +191,7 @@ fun HomeScreen(
             Text(
                 "Today's Color",
                 style = MaterialTheme.typography.labelLarge,
-                color = Color.White.copy(alpha = 0.6f)
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
             )
 
             Spacer(Modifier.height(16.dp))
@@ -224,7 +208,7 @@ fun HomeScreen(
                     Icon(
                         Icons.Default.LocalFireDepartment,
                         contentDescription = "Captured",
-                        tint = Color.White,
+                        tint = Color.White,  // always white — sits on the accent color circle
                         modifier = Modifier.size(48.dp)
                     )
                 }
@@ -236,7 +220,7 @@ fun HomeScreen(
                 color?.name ?: "Loading…",
                 fontSize = 36.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = MaterialTheme.colorScheme.onBackground
             )
 
             Spacer(Modifier.height(6.dp))
@@ -244,7 +228,7 @@ fun HomeScreen(
             Text(
                 color?.hex ?: "",
                 fontSize = 15.sp,
-                color = Color.White.copy(alpha = 0.45f),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
                 letterSpacing = 2.sp
             )
 
@@ -257,7 +241,7 @@ fun HomeScreen(
                     containerColor = if (state.capturedToday)
                         animatedColor.copy(alpha = 0.15f)
                     else
-                        Color.White.copy(alpha = 0.08f)
+                        MaterialTheme.colorScheme.surface
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -275,7 +259,7 @@ fun HomeScreen(
                             else "${state.streak} day streak",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Spacer(Modifier.height(8.dp))
@@ -285,7 +269,7 @@ fun HomeScreen(
                         color = if (state.capturedToday)
                             animatedColor.copy(alpha = 0.9f)
                         else
-                            Color.White.copy(alpha = 0.65f),
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
                         lineHeight = 18.sp
                     )
                 }
@@ -329,9 +313,18 @@ fun HomeScreen(
             Spacer(Modifier.height(32.dp))
         }
 
-        // Settings gear — opens notification time picker
+        // Confetti celebration overlay
+        state.celebrationState?.let { celebration ->
+            CelebrationOverlay(
+                celebration = celebration,
+                accentColor = animatedColor,
+                onDone = { viewModel.onCelebrationDone() }
+            )
+        }
+
+        // Settings gear
         IconButton(
-            onClick = { showTimePicker = true },
+            onClick = onOpenSettings,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
@@ -340,7 +333,7 @@ fun HomeScreen(
             Icon(
                 Icons.Default.Settings,
                 contentDescription = "Notification settings",
-                tint = Color.White.copy(alpha = 0.45f),
+                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
                 modifier = Modifier.size(22.dp)
             )
         }
@@ -387,11 +380,165 @@ private fun ColorHistoryStrip(capturedDayIndices: Set<Int>, now: Long) {
                         .clip(CircleShape)
                         .background(if (captured) dayColor else dayColor.copy(alpha = 0.18f))
                         .then(
-                            if (isToday) Modifier.border(1.5.dp, Color.White.copy(alpha = 0.7f), CircleShape)
+                            if (isToday) Modifier.border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
                             else Modifier
                         )
                 )
             }
         }
     }
+}
+
+// ── Celebration overlay ───────────────────────────────────────────────────────
+
+@Composable
+private fun CelebrationOverlay(
+    celebration: CelebrationState,
+    accentColor: Color,
+    onDone: () -> Unit
+) {
+    val isMilestone = celebration is CelebrationState.Milestone
+    val accentArgb = accentColor.toArgb()
+    val parties = remember(celebration) {
+        if (isMilestone) milestoneParties(accentArgb) else dailyParties(accentArgb)
+    }
+
+    KonfettiView(
+        modifier = Modifier.fillMaxSize(),
+        parties = parties,
+        updateListener = object : OnParticleSystemUpdateListener {
+            override fun onParticleSystemEnded(system: PartySystem, activeSystems: Int) {
+                if (activeSystems == 0) onDone()
+            }
+        }
+    )
+
+    if (isMilestone) {
+        val days = (celebration as CelebrationState.Milestone).days
+        var cardVisible by remember { mutableStateOf(true) }
+        LaunchedEffect(Unit) {
+            delay(2800)
+            cardVisible = false
+        }
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            AnimatedVisibility(
+                visible = cardVisible,
+                enter = fadeIn(tween(300)) + scaleIn(
+                    tween(300),
+                    initialScale = 0.8f
+                ),
+                exit = fadeOut(tween(400)) + scaleOut(tween(400))
+            ) {
+                Card(
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF1A1A1A).copy(alpha = 0.95f)
+                    ),
+                    modifier = Modifier.padding(40.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 36.dp, vertical = 28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(milestoneEmoji(days), fontSize = 52.sp)
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "$days Day Streak!",
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = accentColor,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            milestoneMessage(days),
+                            fontSize = 14.sp,
+                            color = Color.White.copy(alpha = 0.65f),
+                            textAlign = TextAlign.Center,
+                            lineHeight = 20.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun milestoneEmoji(days: Int) = when (days) {
+    7    -> "🔥"
+    21   -> "⭐"
+    30   -> "🎯"
+    50   -> "💎"
+    100  -> "🏆"
+    150  -> "🌟"
+    180  -> "🎨"
+    200  -> "👑"
+    240  -> "🦋"
+    300  -> "🌈"
+    365  -> "🎊"
+    else -> "🎉"
+}
+
+private fun milestoneMessage(days: Int) = when (days) {
+    7    -> "One full week of color walks!"
+    21   -> "Three weeks strong. This is a habit now."
+    30   -> "A full month. You have a true eye for color."
+    50   -> "50 days. Extraordinary commitment."
+    100  -> "100 days. You are a legend."
+    150  -> "150 days. Half a year of seeing the world in color."
+    180  -> "6 months. Your eye for color is truly refined."
+    200  -> "200 days. An artist's dedication."
+    240  -> "8 months. Remarkable. Absolutely remarkable."
+    300  -> "300 days. You have transformed how you see the world."
+    365  -> "One full year. 365 days of color walks. This is who you are now."
+    else -> "Incredible streak!"
+}
+
+private fun dailyParties(accentArgb: Int): List<Party> = listOf(
+    Party(
+        speed = 0f,
+        maxSpeed = 20f,
+        damping = 0.9f,
+        spread = 60,
+        colors = listOf(accentArgb, 0xFFFFFFFF.toInt(), 0xFFFFD700.toInt(), 0xFFFF69B4.toInt()),
+        emitter = Emitter(duration = 600, TimeUnit.MILLISECONDS).perSecond(80),
+        position = Position.Relative(0.5, -0.05)
+    )
+)
+
+private fun milestoneParties(accentArgb: Int): List<Party> {
+    val colors = listOf(
+        accentArgb,
+        0xFFFFD700.toInt(),
+        0xFFFF69B4.toInt(),
+        0xFF00CED1.toInt(),
+        0xFFFF6347.toInt(),
+        0xFF9370DB.toInt()
+    )
+    val base = Party(
+        speed = 5f,
+        maxSpeed = 35f,
+        damping = 0.85f,
+        colors = colors,
+        emitter = Emitter(duration = 1, TimeUnit.MILLISECONDS).perSecond(1)
+    )
+    return listOf(
+        base.copy(
+            spread = 360,
+            emitter = Emitter(duration = 1500, TimeUnit.MILLISECONDS).perSecond(180),
+            position = Position.Relative(0.5, -0.05)
+        ),
+        base.copy(
+            angle = 45,
+            spread = 70,
+            emitter = Emitter(duration = 1200, TimeUnit.MILLISECONDS).perSecond(80),
+            position = Position.Relative(0.0, 0.4)
+        ),
+        base.copy(
+            angle = 135,
+            spread = 70,
+            emitter = Emitter(duration = 1200, TimeUnit.MILLISECONDS).perSecond(80),
+            position = Position.Relative(1.0, 0.4)
+        )
+    )
 }

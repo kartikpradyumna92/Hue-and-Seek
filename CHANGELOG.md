@@ -5,6 +5,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.7.0] - 2026-06-02
+
+### Added
+- **Light theme support** — Settings screen now offers Dark, Light, and System (default) theme options. All screens updated to use Material3 color scheme; warm gray background (#F2F2F2) and white cards in light mode, unchanged dark mode.
+- **Settings screen** — accessible via the gear icon on the home screen. Contains a theme selector and notification controls (toggle on/off, custom reminder time) previously scattered across the app.
+- **Streak milestone celebrations** — confetti fires on every daily capture (light burst from top). Milestone streaks (7, 21, 30, 50, 100, 150, 180, 200, 240, 300, 365 days) trigger a full multi-cannon confetti display plus an animated overlay card with emoji and personalised message. Fires once per calendar day; reinstall gallery recovery never triggers confetti.
+- **Permission rationale screen** — shown once after onboarding before any OS permission dialogs. Each permission (Camera, Location, Notifications, Photo Library) gets a card with an icon, Required/Optional badge, and a plain-English explanation of exactly how it's used. Shown after onboarding so users understand the app before being asked for access.
+- **Value-first permission flow** — onboarding runs before permission requests. Research-backed ordering: users who have seen the app's value grant permissions at a higher rate.
+- **POST_NOTIFICATIONS runtime permission** — on Android 13+ the app now explicitly requests notification permission. Previously missing, which caused silent notification failures on modern devices.
+- **App preferences backed up** — notification time, theme choice, and onboarding state are now included in Android Auto Backup and device-transfer rules so settings survive reinstall.
+
+### Changed
+- **Default notification time** changed from 12:00 PM to 10:00 AM.
+- **build.gradle.kts** — versionName and versionCode now reflect the actual release (were stuck at "1.0" / 1 since launch).
+
+### Fixed
+- **Duplicate Room database instances** — `AppModule` was calling `Room.databaseBuilder().build()` independently, creating a separate DB connection from the one used by the widget and `StreakReminderReceiver`. All paths now share a single instance via `AppDatabase.getInstance()`.
+- **Celebration confetti re-triggered after dismissal** — `HomeViewModel.load()` preserved stale celebration state across coroutine boundaries; the `else` branch now returns `null` and relies on the `lastCelebDay` SharedPreferences guard.
+- **No Room database migration strategy** — added `.fallbackToDestructiveMigration()` as a safety net so schema changes cause a clean rebuild instead of a crash.
+- **StreakReminderReceiver used orphaned CoroutineScope** — replaced `CoroutineScope(Dispatchers.IO)` with `GlobalScope.launch(Dispatchers.IO)`, the documented correct pattern for `BroadcastReceiver.goAsync()`.
+- **Camera preview flickered on every zoom tap** — the `AndroidView` `update` block captured `activeZoom`, triggering `unbindAll()` and a full camera rebind on every zoom change. Zoom now applied via `LaunchedEffect(activeZoom)` directly on the bound camera without rebinding.
+- **`ThemeMode.valueOf()` crash on corrupted preference** — wrapped in `try/catch` with `SYSTEM` fallback.
+- **`BitmapFactory.decodeByteArray` null crash** — platform type can return null on decode failure; added early return before passing to `onPhotoCaptured`.
+- **`openPhoto()` showed wrong photo when id not found** — `.coerceAtLeast(0)` silently opened the first photo; replaced with an `if (idx >= 0)` guard that no-ops instead.
+
+---
+
 ## [1.6.0] - 2026-06-02
 
 ### Added

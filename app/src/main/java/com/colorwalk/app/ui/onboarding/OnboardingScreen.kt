@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material3.*
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -72,7 +73,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(accent.copy(alpha = 0.22f), Color(0xFF121212))))
+            .background(Brush.verticalGradient(listOf(accent.copy(alpha = 0.22f), MaterialTheme.colorScheme.background)))
     ) {
         Column(
             modifier = Modifier
@@ -91,7 +92,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             ) {
                 if (!isLast) {
                     TextButton(onClick = onFinish) {
-                        Text("Skip", color = Color.White.copy(alpha = 0.38f), fontSize = 14.sp)
+                        Text("Skip", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f), fontSize = 14.sp)
                     }
                 }
             }
@@ -112,7 +113,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                         p.title,
                         fontSize = 26.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onBackground,
                         textAlign = TextAlign.Center,
                         lineHeight = 32.sp
                     )
@@ -120,7 +121,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                     Text(
                         p.body,
                         fontSize = 15.sp,
-                        color = Color.White.copy(alpha = 0.62f),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
                         textAlign = TextAlign.Center,
                         lineHeight = 23.sp
                     )
@@ -140,7 +141,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                         modifier = Modifier
                             .clip(CircleShape)
                             .size(if (active) 10.dp else 7.dp)
-                            .background(if (active) accent else Color.White.copy(alpha = 0.25f))
+                            .background(if (active) accent else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))
                     )
                 }
             }

@@ -40,7 +40,7 @@ fun ColorAlbumScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF121212))
+            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
         Row(
@@ -48,7 +48,7 @@ fun ColorAlbumScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
             }
             Text(
                 colorName,
@@ -60,7 +60,7 @@ fun ColorAlbumScreen(
             Spacer(Modifier.weight(1f))
             Text(
                 "${photos.size} photo${if (photos.size != 1) "s" else ""}",
-                color = Color.White.copy(alpha = 0.5f),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
                 fontSize = 14.sp
             )
         }
@@ -109,7 +109,7 @@ private fun PhotoCard(photo: PhotoEntity, accentColor: Color, onOpen: () -> Unit
     Card(
         onClick = onOpen,
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column {
@@ -142,7 +142,7 @@ private fun PhotoCard(photo: PhotoEntity, accentColor: Color, onOpen: () -> Unit
                 }
             }
             Column(modifier = Modifier.padding(10.dp)) {
-                Text(dateStr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text(dateStr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 if (photo.locationName != null) {
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -156,7 +156,7 @@ private fun PhotoCard(photo: PhotoEntity, accentColor: Color, onOpen: () -> Unit
                         Text(
                             photo.locationName,
                             fontSize = 11.sp,
-                            color = Color.White.copy(alpha = 0.6f),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                             maxLines = 1
                         )
                     }
@@ -173,7 +173,7 @@ private fun PhotoCard(photo: PhotoEntity, accentColor: Color, onOpen: () -> Unit
                     Text(
                         photo.dominantColorHex,
                         fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.4f)
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
                     )
                 }
             }

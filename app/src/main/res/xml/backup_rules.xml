@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Back up the Room database (streak, photos metadata) -->
     <include domain="database" path="colorwalk.db" />
     <include domain="database" path="colorwalk.db-shm" />
     <include domain="database" path="colorwalk.db-wal" />
-    <!-- Back up DataStore preferences -->
     <include domain="file" path="datastore" />
-    <!-- Exclude cache -->
+    <include domain="sharedpref" path="app_prefs.xml" />
     <exclude domain="cache" path="." />
 </full-backup-content>

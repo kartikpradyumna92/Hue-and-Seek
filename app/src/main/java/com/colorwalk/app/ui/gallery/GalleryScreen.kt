@@ -68,7 +68,7 @@ fun GalleryScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF121212))
+            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
         // Top bar
@@ -79,13 +79,13 @@ fun GalleryScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
             }
             Text(
                 "Gallery",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(start = 4.dp)
             )
         }
@@ -130,8 +130,8 @@ fun GalleryScreen(
 
 @Composable
 private fun GalleryTabChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val bg = if (selected) Color.White else Color.White.copy(alpha = 0.08f)
-    val textColor = if (selected) Color.Black else Color.White.copy(alpha = 0.7f)
+    val bg = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
+    val textColor = if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
@@ -175,7 +175,7 @@ private fun DatePhotoList(photos: List<PhotoEntity>, onDelete: (PhotoEntity) -> 
                     monthYear,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.85f),
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
                     modifier = Modifier.padding(bottom = 10.dp, top = 4.dp)
                 )
             }
@@ -218,7 +218,7 @@ private fun DatePhotoRow(photo: PhotoEntity, onDelete: () -> Unit, onOpen: () ->
     Card(
         onClick = onOpen,
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(modifier = Modifier.height(88.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -247,12 +247,12 @@ private fun DatePhotoRow(photo: PhotoEntity, onDelete: () -> Unit, onOpen: () ->
                     Spacer(Modifier.width(6.dp))
                     Text(photo.colorName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = accentColor)
                 }
-                Text(dateStr, fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
+                Text(dateStr, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 if (photo.locationName != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.LocationOn, contentDescription = null, tint = Color.White.copy(alpha = 0.4f), modifier = Modifier.size(11.dp))
+                        Icon(Icons.Default.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f), modifier = Modifier.size(11.dp))
                         Spacer(Modifier.width(3.dp))
-                        Text(photo.locationName, fontSize = 11.sp, color = Color.White.copy(alpha = 0.4f), maxLines = 1)
+                        Text(photo.locationName, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f), maxLines = 1)
                     }
                 }
             }
@@ -261,7 +261,7 @@ private fun DatePhotoRow(photo: PhotoEntity, onDelete: () -> Unit, onOpen: () ->
                 onClick = { showConfirm = true },
                 modifier = Modifier.padding(end = 4.dp).size(36.dp)
             ) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.White.copy(alpha = 0.35f), modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f), modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -274,12 +274,12 @@ private fun EmptyGallery() {
             Icon(
                 Icons.Default.PhotoLibrary,
                 contentDescription = null,
-                tint = Color.White.copy(alpha = 0.3f),
+                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
                 modifier = Modifier.size(72.dp)
             )
             Spacer(Modifier.height(16.dp))
-            Text("No photos yet", color = Color.White.copy(alpha = 0.4f), fontSize = 18.sp)
-            Text("Start your first color walk!", color = Color.White.copy(alpha = 0.3f), fontSize = 14.sp)
+            Text("No photos yet", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f), fontSize = 18.sp)
+            Text("Start your first color walk!", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f), fontSize = 14.sp)
         }
     }
 }
@@ -307,11 +307,11 @@ private fun ColorFolderCard(folder: ColorSummary, onClick: () -> Unit) {
                     .background(color)
             )
             Spacer(Modifier.height(12.dp))
-            Text(folder.colorName, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text(folder.colorName, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
             Text(
                 folder.colorHex.uppercase(),
                 fontSize = 11.sp,
-                color = Color.White.copy(alpha = 0.45f),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
                 letterSpacing = 1.sp
             )
         }

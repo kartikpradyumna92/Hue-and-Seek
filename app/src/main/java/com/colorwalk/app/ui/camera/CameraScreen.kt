@@ -112,13 +112,19 @@ fun CameraScreen(
                 }
             },
             update = { previewView ->
+                // Only rebind when camera selector changes (front/back switch).
+                // Zoom is applied separately via LaunchedEffect to avoid unbindAll on every zoom tap.
                 bindCamera(context, lifecycleOwner, previewView, cameraSelector) { cap, cam ->
                     imageCapture = cap; camera = cam
-                    applyZoom(cam, activeZoom)
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Apply zoom without rebinding the camera
+        LaunchedEffect(activeZoom) {
+            camera?.let { applyZoom(it, activeZoom) }
+        }
 
         // Top bar
         Row(
@@ -243,6 +249,7 @@ fun CameraScreen(
                                         buffer.get(bytes)
                                         proxy.close()
                                         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                            ?: return
                                         viewModel.onPhotoCaptured(bmp)
                                     }
                                     override fun onError(e: ImageCaptureException) {
@@ -336,7 +343,7 @@ private fun CameraPermissionDenied(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF121212))
+            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
         IconButton(
@@ -344,9 +351,9 @@ private fun CameraPermissionDenied(
             modifier = Modifier
                 .padding(8.dp)
                 .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.08f))
+                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
         ) {
-            Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+            Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
         }
 
         Column(
@@ -360,13 +367,13 @@ private fun CameraPermissionDenied(
                 modifier = Modifier
                     .size(96.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.07f)),
+                    .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     Icons.Default.CameraAlt,
                     contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.5f),
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
                     modifier = Modifier.size(44.dp)
                 )
             }
@@ -377,7 +384,7 @@ private fun CameraPermissionDenied(
                 "Camera access required",
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center
             )
 
@@ -386,7 +393,7 @@ private fun CameraPermissionDenied(
             Text(
                 "Hue & Seek needs camera access to capture your daily color walk photos. Your photos are saved only to your device.",
                 fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.6f),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 textAlign = TextAlign.Center,
                 lineHeight = 21.sp
             )
@@ -414,7 +421,7 @@ private fun CameraPermissionDenied(
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 shape = RoundedCornerShape(14.dp)
             ) {
-                Text("Open Settings", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text("Open Settings", color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold)
             }
         }
     }

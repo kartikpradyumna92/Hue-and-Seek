@@ -49,8 +49,8 @@ class GalleryViewModel @Inject constructor(
     fun clearSelection() { _selectedColor.value = null }
 
     fun openPhoto(photo: PhotoEntity, photos: List<PhotoEntity>) {
-        val idx = photos.indexOfFirst { it.id == photo.id }.coerceAtLeast(0)
-        _viewerState.value = PhotoViewerState(photos, idx)
+        val idx = photos.indexOfFirst { it.id == photo.id }
+        if (idx >= 0) _viewerState.value = PhotoViewerState(photos, idx)
     }
 
     fun closePhoto() { _viewerState.value = null }
