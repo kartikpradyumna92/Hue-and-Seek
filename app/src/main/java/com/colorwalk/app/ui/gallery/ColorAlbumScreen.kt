@@ -1,6 +1,7 @@
 package com.colorwalk.app.ui.gallery
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -56,6 +58,17 @@ fun ColorAlbumScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
+            .pointerInput(onBack) {
+                var totalDrag = 0f
+                detectHorizontalDragGestures(
+                    onDragStart  = { totalDrag = 0f },
+                    onDragEnd    = { totalDrag = 0f },
+                    onDragCancel = { totalDrag = 0f }
+                ) { _, dragAmount ->
+                    totalDrag += dragAmount
+                    if (totalDrag > 80.dp.toPx()) { onBack(); totalDrag = 0f }
+                }
+            }
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -145,7 +158,7 @@ private fun EmptyColorAlbum(colorName: String) {
 }
 
 @Composable
-private fun PhotoCard(photo: PhotoEntity, accentColor: Color, onOpen: () -> Unit, onDelete: () -> Unit) {
+internal fun PhotoCard(photo: PhotoEntity, accentColor: Color, onOpen: () -> Unit, onDelete: () -> Unit) {
     val dateStr = remember(photo.dateTaken) {
         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(photo.dateTaken))
     }

@@ -50,6 +50,60 @@ class PhotoRepository @Inject constructor(
         dao.getFavouriteColor()
     }
 
+    /**
+     * One-time backfill: for every DB row with null lat/lon, find the corresponding
+     * MediaStore entry by filename and read its GPS EXIF (written at capture time by
+     * publishToSystemGallery). If GPS is found, update lat/lon and reverse-geocode
+     * locationName. After all rows are filled this becomes a no-op.
+     */
+    suspend fun backfillLocationData() = withContext(Dispatchers.IO) {
+        val missing = dao.getAllPhotosSnapshot()
+            .filter { photo ->
+                val lat = photo.latitude
+                val lon = photo.longitude
+                (lat == null && lon == null) ||
+                (lat != null && lon != null && Math.abs(lat) < 0.001 && Math.abs(lon) < 0.001)
+            }
+        if (missing.isEmpty()) return@withContext
+
+        // Build filename → GPS map from MediaStore EXIF in one pass
+        val locationByFilename = mutableMapOf<String, Pair<Double, Double>>()
+        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME)
+        val selection = "${MediaStore.Images.Media.DISPLAY_NAME} LIKE 'ColorWalk_%'"
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection, selection, null, null
+        )?.use { cursor ->
+            val idCol   = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(nameCol) ?: continue
+                val mediaId  = cursor.getLong(idCol)
+                val mediaUri = ContentUris.withAppendedId(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId
+                )
+                val (lat, lon) = readPhotoLocation(mediaUri)
+                if (lat != null && lon != null) locationByFilename[name] = Pair(lat, lon)
+            }
+        }
+
+        // Update each DB row that has a matching MediaStore GPS entry
+        for (photo in missing) {
+            val filename = java.io.File(photo.filePath).name
+                .takeIf { it.startsWith("ColorWalk_") } ?: continue
+            val (lat, lon) = locationByFilename[filename] ?: continue
+            val locationName = reverseGeocode(lat, lon)
+            dao.updateLocation(photo.id, lat, lon, locationName)
+        }
+    }
+
+    suspend fun tagPhotoLocation(id: Long, locationName: String) = withContext(Dispatchers.IO) {
+        // Inherit lat/lon from an existing photo with the same name so coordinate clustering works.
+        val ref = dao.getAllPhotosSnapshot()
+            .firstOrNull { it.locationName == locationName && it.latitude != null && it.longitude != null }
+        dao.updateLocation(id, ref?.latitude, ref?.longitude, locationName)
+    }
+
     suspend fun getStreak(): Int = withContext(Dispatchers.IO) {
         StreakCalculator.compute(dao.getRecentPhotoDates())
     }

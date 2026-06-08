@@ -38,6 +38,9 @@ interface PhotoDao {
     @Query("UPDATE photos SET filePath = :newPath WHERE id = :id")
     suspend fun updateFilePath(id: Long, newPath: String)
 
+    @Query("UPDATE photos SET latitude = :lat, longitude = :lon, locationName = :name WHERE id = :id")
+    suspend fun updateLocation(id: Long, lat: Double?, lon: Double?, name: String?)
+
     @Query("SELECT * FROM photos")
     suspend fun getAllPhotosSnapshot(): List<PhotoEntity>
 

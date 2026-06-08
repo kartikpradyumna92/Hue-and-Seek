@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -83,10 +84,10 @@ class StatsViewModelTest {
     }
 
     @Test
-    fun initialSelectedPhoto_isNull() = runTest {
+    fun initialSelectedDayPhotos_isEmpty() = runTest {
         val vm = buildViewModel()
         advanceUntilIdle()
-        assertNull(vm.state.value.selectedPhoto)
+        assertTrue(vm.state.value.selectedDayPhotos.isEmpty())
     }
 
     // ── totalPhotos ──────────────────────────────────────────────────────────
@@ -244,7 +245,7 @@ class StatsViewModelTest {
     }
 
     @Test
-    fun load_twoPhotosOnSameDay_photosByDayIndexPicksMostRecent() = runTest {
+    fun load_twoPhotosOnSameDay_photosByDayIndexHasBothAndMostRecentIsFirst() = runTest {
         val earlier = daysAgo(0) - 3_600_000L // 1 hour earlier in the day
         val later   = daysAgo(0)
         coEvery { repo.getAllPhotosSnapshot() } returns listOf(
@@ -254,7 +255,9 @@ class StatsViewModelTest {
         val vm = buildViewModel()
         advanceUntilIdle()
         val dayIndex = StreakCalculator.epochMillisToDayIndex(later)
-        assertEquals(2L, vm.state.value.photosByDayIndex[dayIndex]?.id)
+        val dayPhotos = vm.state.value.photosByDayIndex[dayIndex]
+        assertEquals(2, dayPhotos?.size)
+        assertEquals(2L, dayPhotos?.first()?.id) // most recent first
     }
 
     @Test
@@ -267,28 +270,28 @@ class StatsViewModelTest {
         assertTrue(vm.state.value.photosByDayIndex.containsKey(expectedIndex))
     }
 
-    // ── selectPhoto ───────────────────────────────────────────────────────────
+    // ── selectDay ─────────────────────────────────────────────────────────────
 
     @Test
-    fun selectPhoto_setsSelectedPhoto() = runTest {
+    fun selectDay_setsSelectedDayPhotos() = runTest {
         val vm = buildViewModel()
         advanceUntilIdle()
-        val photo = makePhoto(99L)
-        vm.selectPhoto(photo)
-        assertEquals(photo, vm.state.value.selectedPhoto)
+        val photos = listOf(makePhoto(99L), makePhoto(100L))
+        vm.selectDay(photos)
+        assertEquals(photos, vm.state.value.selectedDayPhotos)
     }
 
     @Test
-    fun selectPhoto_null_clearsSelectedPhoto() = runTest {
+    fun selectDay_emptyList_clearsSelectedDayPhotos() = runTest {
         val vm = buildViewModel()
         advanceUntilIdle()
-        vm.selectPhoto(makePhoto(99L))
-        vm.selectPhoto(null)
-        assertNull(vm.state.value.selectedPhoto)
+        vm.selectDay(listOf(makePhoto(99L)))
+        vm.selectDay(emptyList())
+        assertTrue(vm.state.value.selectedDayPhotos.isEmpty())
     }
 
     @Test
-    fun selectPhoto_doesNotAffectOtherStateFields() = runTest {
+    fun selectDay_doesNotAffectOtherStateFields() = runTest {
         coEvery { repo.getAllPhotosSnapshot() } returns listOf(makePhoto(1L))
         coEvery { repo.getStreak() } returns 5
         val vm = buildViewModel()
@@ -296,7 +299,7 @@ class StatsViewModelTest {
         val totalBefore = vm.state.value.totalPhotos
         val streakBefore = vm.state.value.currentStreak
 
-        vm.selectPhoto(makePhoto(99L))
+        vm.selectDay(listOf(makePhoto(99L)))
 
         assertEquals(totalBefore, vm.state.value.totalPhotos)
         assertEquals(streakBefore, vm.state.value.currentStreak)

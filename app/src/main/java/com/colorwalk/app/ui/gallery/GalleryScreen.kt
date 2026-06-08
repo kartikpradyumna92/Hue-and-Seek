@@ -3,17 +3,20 @@ package com.colorwalk.app.ui.gallery
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Search
@@ -22,12 +25,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -37,9 +42,11 @@ import coil.request.ImageRequest
 import com.colorwalk.app.data.db.ColorSummary
 import java.io.File as JavaFile
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.viewmodel.AlbumSortOrder
 import com.colorwalk.app.viewmodel.DateFilter
 import com.colorwalk.app.viewmodel.GalleryViewMode
 import com.colorwalk.app.viewmodel.GalleryViewModel
+import com.colorwalk.app.viewmodel.PlaceSummary
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -48,14 +55,20 @@ fun GalleryScreen(
     onBack: () -> Unit,
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
-    val folders       by viewModel.colorFolders.collectAsState()
-    val allPhotos     by viewModel.allPhotos.collectAsState()
-    val viewMode      by viewModel.viewMode.collectAsState()
-    val selectedColor by viewModel.selectedColor.collectAsState()
-    val viewerState   by viewModel.viewerState.collectAsState()
-    val searchQuery   by viewModel.searchQuery.collectAsState()
-    val dateFilter    by viewModel.dateFilter.collectAsState()
-    var swipeDelta    by remember { mutableFloatStateOf(0f) }
+    val folders            by viewModel.colorFolders.collectAsState()
+    val allPhotos          by viewModel.allPhotos.collectAsState()
+    val photosByPlace      by viewModel.photosByPlace.collectAsState()
+    val viewMode           by viewModel.viewMode.collectAsState()
+    val selectedColor      by viewModel.selectedColor.collectAsState()
+    val selectedPlace      by viewModel.selectedPlace.collectAsState()
+    val viewerState        by viewModel.viewerState.collectAsState()
+    val searchQuery        by viewModel.searchQuery.collectAsState()
+    val dateFilter         by viewModel.dateFilter.collectAsState()
+    val dateSortOrder      by viewModel.dateSortOrder.collectAsState()
+    val hasUntaggedPhotos  by viewModel.hasUntaggedPhotos.collectAsState()
+    val untaggedPhotos     by viewModel.untaggedPhotos.collectAsState()
+    val showingUntagged    by viewModel.showingUntagged.collectAsState()
+    var swipeDelta         by remember { mutableFloatStateOf(0f) }
 
     // Full-screen viewer takes priority over everything
     if (viewerState != null) {
@@ -78,6 +91,23 @@ fun GalleryScreen(
         return
     }
 
+    if (selectedPlace != null) {
+        PlaceAlbumScreen(
+            locationName = selectedPlace!!,
+            viewModel = viewModel,
+            onBack = { viewModel.clearPlaceSelection() }
+        )
+        return
+    }
+
+    if (showingUntagged) {
+        UntaggedAlbumScreen(
+            viewModel = viewModel,
+            onBack = { viewModel.closeUntagged() }
+        )
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -91,8 +121,12 @@ fun GalleryScreen(
                         when {
                             swipeDelta < -threshold && viewMode == GalleryViewMode.COLOR ->
                                 viewModel.setViewMode(GalleryViewMode.DATE)
+                            swipeDelta < -threshold && viewMode == GalleryViewMode.DATE ->
+                                viewModel.setViewMode(GalleryViewMode.PLACE)
                             swipeDelta > threshold && viewMode == GalleryViewMode.DATE ->
                                 viewModel.setViewMode(GalleryViewMode.COLOR)
+                            swipeDelta > threshold && viewMode == GalleryViewMode.PLACE ->
+                                viewModel.setViewMode(GalleryViewMode.DATE)
                             swipeDelta > threshold && viewMode == GalleryViewMode.COLOR ->
                                 onBack()
                         }
@@ -124,11 +158,12 @@ fun GalleryScreen(
             )
         }
 
-        // View mode tabs
+        // View mode tabs — scrollable so all 3 fit on small screens
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             GalleryTabChip(
@@ -141,23 +176,66 @@ fun GalleryScreen(
                 selected = viewMode == GalleryViewMode.DATE,
                 onClick = { viewModel.setViewMode(GalleryViewMode.DATE) }
             )
+            GalleryTabChip(
+                label = "By Place",
+                selected = viewMode == GalleryViewMode.PLACE,
+                onClick = { viewModel.setViewMode(GalleryViewMode.PLACE) }
+            )
         }
 
-        // Filter row — search bar in Color mode, date chips in Date mode
+        // Filter / sort row per mode
         when (viewMode) {
             GalleryViewMode.COLOR -> ColorSearchBar(
                 query = searchQuery,
                 onQueryChange = { viewModel.setSearchQuery(it) },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
-            GalleryViewMode.DATE -> DateFilterRow(
-                selected = dateFilter,
-                onSelect = { viewModel.setDateFilter(it) },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-            )
+            GalleryViewMode.DATE -> {
+                // Scrollable date filter chips
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    DateFilter.entries.forEach { filter ->
+                        FilterChip(
+                            selected = dateFilter == filter,
+                            onClick = { viewModel.setDateFilter(filter) },
+                            label = { Text(filter.label, fontSize = 13.sp) }
+                        )
+                    }
+                }
+                // Sort order row
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Sort:",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                    )
+                    AlbumSortOrder.entries.forEach { order ->
+                        FilterChip(
+                            selected = dateSortOrder == order,
+                            onClick = { viewModel.setDateSortOrder(order) },
+                            label = { Text(order.label, fontSize = 12.sp) }
+                        )
+                    }
+                }
+            }
+            GalleryViewMode.PLACE -> { /* no filter row for place */ }
         }
 
-        val isEmpty = if (viewMode == GalleryViewMode.COLOR) folders.isEmpty() else allPhotos.isEmpty()
+        val isEmpty = when (viewMode) {
+            GalleryViewMode.COLOR -> folders.isEmpty()
+            GalleryViewMode.DATE  -> allPhotos.isEmpty()
+            GalleryViewMode.PLACE -> photosByPlace.isEmpty() && !hasUntaggedPhotos
+        }
 
         if (isEmpty) {
             val (message, sub) = when {
@@ -165,6 +243,8 @@ fun GalleryScreen(
                     Pair("No colors matching\n\"$searchQuery\"", "Try a different search term")
                 viewMode == GalleryViewMode.DATE && dateFilter != DateFilter.ALL ->
                     Pair("No photos in this period", "Try a different time range")
+                viewMode == GalleryViewMode.PLACE && allPhotos.isNotEmpty() ->
+                    Pair("No location data", "Photos need location available at capture time to appear here")
                 else ->
                     Pair("No photos yet", "Start your first color walk!")
             }
@@ -172,10 +252,19 @@ fun GalleryScreen(
         } else {
             when (viewMode) {
                 GalleryViewMode.COLOR -> ColorFolderGrid(folders, onColorClick = { viewModel.selectColor(it) })
-                GalleryViewMode.DATE -> DatePhotoList(
-                    allPhotos,
+                GalleryViewMode.DATE  -> DatePhotoList(
+                    photos = allPhotos,
+                    sortOrder = dateSortOrder,
                     onDelete = { viewModel.deletePhoto(it) },
                     onOpen = { viewModel.openPhoto(it, allPhotos) }
+                )
+                GalleryViewMode.PLACE -> PlaceFolderGrid(
+                    places = photosByPlace,
+                    onPlaceClick = { viewModel.selectPlace(it) },
+                    hasUntagged = hasUntaggedPhotos,
+                    untaggedCount = untaggedPhotos.size,
+                    untaggedThumbnail = untaggedPhotos.firstOrNull()?.filePath,
+                    onUntaggedClick = { viewModel.openUntagged() }
                 )
             }
         }
@@ -211,23 +300,6 @@ private fun ColorSearchBar(
 }
 
 @Composable
-private fun DateFilterRow(
-    selected: DateFilter,
-    onSelect: (DateFilter) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        DateFilter.entries.forEach { filter ->
-            FilterChip(
-                selected = selected == filter,
-                onClick = { onSelect(filter) },
-                label = { Text(filter.label, fontSize = 13.sp) }
-            )
-        }
-    }
-}
-
-@Composable
 private fun GalleryTabChip(label: String, selected: Boolean, onClick: () -> Unit) {
     val bg = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
     val textColor = if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
@@ -257,13 +329,209 @@ private fun ColorFolderGrid(folders: List<ColorSummary>, onColorClick: (String) 
 }
 
 @Composable
-private fun DatePhotoList(photos: List<PhotoEntity>, onDelete: (PhotoEntity) -> Unit, onOpen: (PhotoEntity) -> Unit = {}) {
-    val grouped = remember(photos) {
+private fun PlaceFolderGrid(
+    places: List<PlaceSummary>,
+    onPlaceClick: (String) -> Unit,
+    hasUntagged: Boolean = false,
+    untaggedCount: Int = 0,
+    untaggedThumbnail: String? = null,
+    onUntaggedClick: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        contentPadding = PaddingValues(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(places, key = { it.locationName }) { place ->
+            PlaceFolderCard(place = place, context = context, onClick = { onPlaceClick(place.locationName) })
+        }
+        if (hasUntagged) {
+            item(key = "untagged_card") {
+                UntaggedFolderCard(
+                    count = untaggedCount,
+                    thumbnailPath = untaggedThumbnail,
+                    context = context,
+                    onClick = onUntaggedClick
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UntaggedFolderCard(
+    count: Int,
+    thumbnailPath: String?,
+    context: android.content.Context,
+    onClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clickable(onClick = onClick)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (thumbnailPath != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(if (thumbnailPath.startsWith("/")) JavaFile(thumbnailPath) else Uri.parse(thumbnailPath))
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(16.dp))
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f),
+                            RoundedCornerShape(16.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.LocationOff,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f),
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))
+                        ),
+                        shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.LocationOff,
+                            contentDescription = null,
+                            tint = Color(0xFFFFC107),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            "Needs Location",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "$count photo${if (count != 1) "s" else ""}  •  Tap to tag",
+                        fontSize = 11.sp,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaceFolderCard(place: PlaceSummary, context: android.content.Context, onClick: () -> Unit) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clickable(onClick = onClick)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(
+                        if (place.thumbnailPath.startsWith("/")) JavaFile(place.thumbnailPath)
+                        else Uri.parse(place.thumbnailPath)
+                    )
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(16.dp))
+            )
+            // Gradient overlay at bottom
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))
+                        ),
+                        shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            place.locationName,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "${place.photoCount} photo${if (place.photoCount != 1) "s" else ""}",
+                        fontSize = 11.sp,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DatePhotoList(
+    photos: List<PhotoEntity>,
+    sortOrder: AlbumSortOrder,
+    onDelete: (PhotoEntity) -> Unit,
+    onOpen: (PhotoEntity) -> Unit = {}
+) {
+    val grouped = remember(photos, sortOrder) {
         val fmt = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
-        photos
+        val entries = photos
             .groupBy { fmt.format(Date(it.dateTaken)) }
             .entries
-            .sortedByDescending { it.value.first().dateTaken }
+        when (sortOrder) {
+            AlbumSortOrder.NEWEST -> entries.sortedByDescending { it.value.first().dateTaken }
+            AlbumSortOrder.OLDEST -> entries.sortedBy { it.value.first().dateTaken }
+        }
     }
 
     LazyVerticalGrid(

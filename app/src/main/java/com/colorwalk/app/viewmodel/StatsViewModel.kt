@@ -18,9 +18,9 @@ data class StatsUiState(
     val totalActiveDays: Int = 0,
     val favouriteColorName: String? = null,
     val favouriteColorHex: String? = null,
-    // One photo per day index (most recent if multiple exist on the same day)
-    val photosByDayIndex: Map<Int, PhotoEntity> = emptyMap(),
-    val selectedPhoto: PhotoEntity? = null
+    // All photos per day index, sorted newest-first
+    val photosByDayIndex: Map<Int, List<PhotoEntity>> = emptyMap(),
+    val selectedDayPhotos: List<PhotoEntity> = emptyList()
 )
 
 @HiltViewModel
@@ -45,11 +45,10 @@ class StatsViewModel @Inject constructor(
             val favEntry = allPhotos
                 .groupBy { it.colorName }
                 .maxByOrNull { it.value.size }
-            // Sort descending so .first() per day is the most recent photo
+            // Sort descending so first() per day is the most recent photo
             val photosByDayIndex = allPhotos
                 .sortedByDescending { it.dateTaken }
                 .groupBy { StreakCalculator.epochMillisToDayIndex(it.dateTaken) }
-                .mapValues { it.value.first() }
 
             _state.value = StatsUiState(
                 currentStreak = currentStreak,
@@ -63,8 +62,8 @@ class StatsViewModel @Inject constructor(
         }
     }
 
-    fun selectPhoto(photo: PhotoEntity?) {
-        _state.value = _state.value.copy(selectedPhoto = photo)
+    fun selectDay(photos: List<PhotoEntity>) {
+        _state.value = _state.value.copy(selectedDayPhotos = photos)
     }
 
     private fun computeBestStreak(timestamps: List<Long>): Int {

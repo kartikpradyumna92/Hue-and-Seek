@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.12.0] - 2026-06-08
+
+### Added
+- **Gallery By Place** — new view mode that clusters photos by GPS location into place cards (city/region name or coordinate bucket). Tapping a card opens a filtered album for that place.
+- **Manual location tagging** — "Needs Location" card appears in By Place whenever photos lack a valid location. Tapping opens a tagging screen where each photo can be assigned a location name (free-text or quick-pick from existing places). Card and screen auto-disappear once all photos are tagged.
+- **Swipe right to go back** — swiping right anywhere on a color album or place album screen navigates back to the folder grid, mirroring standard Android back-gesture behaviour.
+
+### Fixed
+- **GPS EXIF not read for imported photos** — added `ACCESS_MEDIA_LOCATION` to the manifest; Android 10+ silently redacts GPS coordinates from MediaStore files without it, causing location backfill to always miss.
+- **"Near 0.0°N, 0.0°E" shown for new photos** — `FusedLocationProvider` can return a `Location(0, 0)` for a bad GPS fix; this was stored and displayed as a real place. Now filtered as invalid in both the coordinate label and the backfill query.
+- **Empty album when tapping coordinate-label place card** — `photosForPlace` only matched photos by `locationName`; photos with no name but valid GPS (shown as "Near X°N, Y°E") never appeared in their album. Fixed by also matching on the computed coordinate label.
+
+### Changed
+- **versionCode** bumped from 7 → 8; **versionName** from 1.11.1 → 1.12.0.
+
+---
+
 ## [1.11.1] - 2026-06-08
 
 ### Fixed

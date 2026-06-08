@@ -12,10 +12,11 @@ import kotlinx.coroutines.launch
 import java.util.Calendar
 import javax.inject.Inject
 
-enum class GalleryViewMode { COLOR, DATE }
+enum class GalleryViewMode { COLOR, DATE, PLACE }
 
 enum class DateFilter(val label: String) {
     ALL("All"),
+    THIS_WEEK("This Week"),
     THIS_MONTH("This Month"),
     LAST_3_MONTHS("Last 3 Months")
 }
@@ -24,6 +25,13 @@ enum class AlbumSortOrder(val label: String) {
     NEWEST("Newest"),
     OLDEST("Oldest")
 }
+
+data class PlaceSummary(
+    val locationName: String,
+    val photoCount: Int,
+    val thumbnailPath: String,
+    val colorHex: String
+)
 
 data class PhotoViewerState(
     val photos: List<PhotoEntity>,
@@ -39,11 +47,14 @@ class GalleryViewModel @Inject constructor(
     private val rawColorFolders = repo.getDistinctColors()
     private val rawAllPhotos    = repo.getAllPhotos()
 
-    private val _searchQuery   = MutableStateFlow("")
+    private val _searchQuery    = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery
 
-    private val _dateFilter    = MutableStateFlow(DateFilter.ALL)
+    private val _dateFilter     = MutableStateFlow(DateFilter.ALL)
     val dateFilter: StateFlow<DateFilter> = _dateFilter
+
+    private val _dateSortOrder  = MutableStateFlow(AlbumSortOrder.NEWEST)
+    val dateSortOrder: StateFlow<AlbumSortOrder> = _dateSortOrder
 
     private val _albumSortOrder = MutableStateFlow(AlbumSortOrder.NEWEST)
     val albumSortOrder: StateFlow<AlbumSortOrder> = _albumSortOrder
@@ -55,9 +66,19 @@ class GalleryViewModel @Inject constructor(
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allPhotos: StateFlow<List<PhotoEntity>> =
-        combine(rawAllPhotos, _dateFilter) { photos, filter ->
-            when (filter) {
+        combine(rawAllPhotos, _dateFilter, _dateSortOrder) { photos, filter, sort ->
+            val filtered = when (filter) {
                 DateFilter.ALL -> photos
+                DateFilter.THIS_WEEK -> {
+                    val cal = Calendar.getInstance().apply {
+                        set(Calendar.DAY_OF_WEEK, firstDayOfWeek)
+                        set(Calendar.HOUR_OF_DAY, 0)
+                        set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }
+                    photos.filter { it.dateTaken >= cal.timeInMillis }
+                }
                 DateFilter.THIS_MONTH -> {
                     val cutoff = Calendar.getInstance().apply {
                         set(Calendar.DAY_OF_MONTH, 1)
@@ -69,19 +90,65 @@ class GalleryViewModel @Inject constructor(
                     photos.filter { it.dateTaken >= cutoff }
                 }
                 DateFilter.LAST_3_MONTHS -> {
-                    val cutoff = Calendar.getInstance().apply {
-                        add(Calendar.MONTH, -3)
-                    }.timeInMillis
+                    val cutoff = Calendar.getInstance().apply { add(Calendar.MONTH, -3) }.timeInMillis
                     photos.filter { it.dateTaken >= cutoff }
                 }
             }
+            when (sort) {
+                AlbumSortOrder.NEWEST -> filtered.sortedByDescending { it.dateTaken }
+                AlbumSortOrder.OLDEST -> filtered.sortedBy { it.dateTaken }
+            }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val photosByPlace: StateFlow<List<PlaceSummary>> = rawAllPhotos
+        .map { photos ->
+            photos
+                .mapNotNull { photo ->
+                    val label = photo.locationName ?: coordinateLabel(photo.latitude, photo.longitude)
+                    if (label != null) photo to label else null
+                }
+                .groupBy { (_, label) -> label }
+                .map { (label, group) ->
+                    val sorted = group.map { it.first }.sortedByDescending { it.dateTaken }
+                    PlaceSummary(label, sorted.size, sorted.first().filePath, sorted.first().colorHex)
+                }
+                .sortedByDescending { it.photoCount }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private fun PhotoEntity.isUntagged(): Boolean {
+        if (locationName != null) return false
+        val lat = latitude; val lon = longitude
+        return (lat == null && lon == null) ||
+               (lat != null && lon != null && Math.abs(lat) < 0.001 && Math.abs(lon) < 0.001)
+    }
+
+    val untaggedPhotos: StateFlow<List<PhotoEntity>> = rawAllPhotos
+        .map { photos -> photos.filter { it.isUntagged() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val hasUntaggedPhotos: StateFlow<Boolean> = untaggedPhotos
+        .map { it.isNotEmpty() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val existingPlaceNames: StateFlow<List<String>> = photosByPlace
+        .map { places -> places.map { it.locationName } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _showingUntagged  = MutableStateFlow(false)
+    val showingUntagged: StateFlow<Boolean> = _showingUntagged
+
+    private val _photoBeingTagged = MutableStateFlow<PhotoEntity?>(null)
+    val photoBeingTagged: StateFlow<PhotoEntity?> = _photoBeingTagged
 
     private val _viewMode = MutableStateFlow(GalleryViewMode.COLOR)
     val viewMode: StateFlow<GalleryViewMode> = _viewMode
 
     private val _selectedColor = MutableStateFlow<String?>(null)
     val selectedColor: StateFlow<String?> = _selectedColor
+
+    private val _selectedPlace = MutableStateFlow<String?>(null)
+    val selectedPlace: StateFlow<String?> = _selectedPlace
 
     private val rawPhotosForColor: Flow<List<PhotoEntity>> = _selectedColor
         .flatMapLatest { colorName ->
@@ -97,15 +164,48 @@ class GalleryViewModel @Inject constructor(
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val photosForPlace: StateFlow<List<PhotoEntity>> =
+        combine(rawAllPhotos, _selectedPlace, _albumSortOrder) { photos, place, order ->
+            if (place == null) emptyList()
+            else {
+                val filtered = photos.filter { photo ->
+                    photo.locationName == place ||
+                    (photo.locationName == null && coordinateLabel(photo.latitude, photo.longitude) == place)
+                }
+                when (order) {
+                    AlbumSortOrder.NEWEST -> filtered.sortedByDescending { it.dateTaken }
+                    AlbumSortOrder.OLDEST -> filtered.sortedBy { it.dateTaken }
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _viewerState = MutableStateFlow<PhotoViewerState?>(null)
     val viewerState: StateFlow<PhotoViewerState?> = _viewerState
+
+    init {
+        viewModelScope.launch { repo.backfillLocationData() }
+    }
 
     fun setViewMode(mode: GalleryViewMode)         { _viewMode.value = mode }
     fun selectColor(colorName: String)             { _selectedColor.value = colorName }
     fun clearSelection()                           { _selectedColor.value = null }
+    fun selectPlace(name: String)                  { _selectedPlace.value = name }
+    fun clearPlaceSelection()                      { _selectedPlace.value = null }
     fun setSearchQuery(query: String)              { _searchQuery.value = query }
     fun setDateFilter(filter: DateFilter)          { _dateFilter.value = filter }
+    fun setDateSortOrder(order: AlbumSortOrder)    { _dateSortOrder.value = order }
     fun setAlbumSortOrder(order: AlbumSortOrder)   { _albumSortOrder.value = order }
+    fun openUntagged()                             { _showingUntagged.value = true }
+    fun closeUntagged()                            { _showingUntagged.value = false }
+    fun startTagging(photo: PhotoEntity)           { _photoBeingTagged.value = photo }
+    fun cancelTagging()                            { _photoBeingTagged.value = null }
+    fun submitTag(photo: PhotoEntity, locationName: String) {
+        if (locationName.isBlank()) return
+        viewModelScope.launch {
+            repo.tagPhotoLocation(photo.id, locationName.trim())
+            _photoBeingTagged.value = null
+        }
+    }
 
     fun openPhoto(photo: PhotoEntity, photos: List<PhotoEntity>) {
         val idx = photos.indexOfFirst { it.id == photo.id }
@@ -129,5 +229,18 @@ class GalleryViewModel @Inject constructor(
             _viewerState.value = if (newList.isEmpty()) null
             else PhotoViewerState(newList, vs.initialIndex.coerceAtMost(newList.lastIndex))
         }
+    }
+
+    // Truncate to 1 decimal place (~11 km bucket) so nearby photos with the same
+    // rough coordinates cluster into one place card. Returns null for null island (0,0)
+    // which indicates a bad GPS fix rather than a real location.
+    private fun coordinateLabel(lat: Double?, lon: Double?): String? {
+        if (lat == null || lon == null) return null
+        if (Math.abs(lat) < 0.001 && Math.abs(lon) < 0.001) return null
+        val latR = Math.floor(Math.abs(lat) * 10) / 10.0
+        val lonR = Math.floor(Math.abs(lon) * 10) / 10.0
+        val latDir = if (lat >= 0) "N" else "S"
+        val lonDir = if (lon >= 0) "E" else "W"
+        return "Near %.1f°%s, %.1f°%s".format(latR, latDir, lonR, lonDir)
     }
 }

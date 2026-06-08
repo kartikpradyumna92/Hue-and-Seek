@@ -36,7 +36,8 @@ class GalleryViewModelTest {
         id: Long,
         colorName: String = "Red",
         colorHex: String = "#E53935",
-        dateTaken: Long = System.currentTimeMillis()
+        dateTaken: Long = System.currentTimeMillis(),
+        locationName: String? = null
     ) = PhotoEntity(
         id = id,
         filePath = "file:///photos/$id.jpg",
@@ -45,7 +46,7 @@ class GalleryViewModelTest {
         dateTaken = dateTaken,
         latitude = null,
         longitude = null,
-        locationName = null,
+        locationName = locationName,
         dominantColorHex = colorHex
     )
 
@@ -405,5 +406,151 @@ class GalleryViewModelTest {
             assertEquals(2L, oldest[1].id)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    // ── dateSortOrder ─────────────────────────────────────────────────────────
+
+    @Test
+    fun initialDateSortOrder_isNewest() = runTest {
+        val vm = buildViewModel()
+        assertEquals(AlbumSortOrder.NEWEST, vm.dateSortOrder.value)
+    }
+
+    @Test
+    fun allPhotos_default_sortedNewestFirst() = runTest {
+        val older = makePhoto(1L, dateTaken = System.currentTimeMillis() - 10_000L)
+        val newer = makePhoto(2L, dateTaken = System.currentTimeMillis())
+
+        val vm = buildViewModel()
+        vm.allPhotos.test {
+            awaitItem() // initial []
+            photosFlow.value = listOf(older, newer) // repo returns older first
+            val sorted = awaitItem()
+            assertEquals(2L, sorted[0].id) // newer first by default
+            assertEquals(1L, sorted[1].id)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun setDateSortOrder_oldest_sortsByDateAscending() = runTest {
+        val older = makePhoto(1L, dateTaken = System.currentTimeMillis() - 10_000L)
+        val newer = makePhoto(2L, dateTaken = System.currentTimeMillis())
+
+        val vm = buildViewModel()
+        vm.allPhotos.test {
+            awaitItem() // initial []
+            photosFlow.value = listOf(newer, older)
+            awaitItem() // [newer, older] — default NEWEST sort
+            vm.setDateSortOrder(AlbumSortOrder.OLDEST)
+            val sorted = awaitItem()
+            assertEquals(1L, sorted[0].id) // older first
+            assertEquals(2L, sorted[1].id)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // ── THIS_WEEK filter ──────────────────────────────────────────────────────
+
+    @Test
+    fun setDateFilter_thisWeek_excludesPhotosOlderThanOneWeek() = runTest {
+        val todayTs       = System.currentTimeMillis()
+        val twoWeeksAgoTs = todayTs - 14L * 24 * 60 * 60 * 1000
+
+        val vm = buildViewModel()
+        vm.allPhotos.test {
+            awaitItem() // initial []
+            photosFlow.value = listOf(
+                makePhoto(1L, dateTaken = todayTs),
+                makePhoto(2L, dateTaken = twoWeeksAgoTs)
+            )
+            awaitItem() // [photo1, photo2] — ALL filter
+            vm.setDateFilter(DateFilter.THIS_WEEK)
+            val filtered = awaitItem()
+            assertEquals(1, filtered.size)
+            assertEquals(1L, filtered[0].id)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // ── photosByPlace ─────────────────────────────────────────────────────────
+
+    @Test
+    fun photosByPlace_groupsByLocationName() = runTest {
+        val vm = buildViewModel()
+        vm.photosByPlace.test {
+            awaitItem() // initial []
+            photosFlow.value = listOf(
+                makePhoto(1L, locationName = "Paris"),
+                makePhoto(2L, locationName = "Paris"),
+                makePhoto(3L, locationName = "Tokyo"),
+                makePhoto(4L)  // no location — excluded
+            )
+            val places = awaitItem()
+            assertEquals(2, places.size)
+            val paris = places.find { it.locationName == "Paris" }
+            val tokyo = places.find { it.locationName == "Tokyo" }
+            assertNotNull(paris)
+            assertNotNull(tokyo)
+            assertEquals(2, paris!!.photoCount)
+            assertEquals(1, tokyo!!.photoCount)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun photosByPlace_sortedByPhotoCountDescending() = runTest {
+        val vm = buildViewModel()
+        vm.photosByPlace.test {
+            awaitItem() // initial []
+            photosFlow.value = listOf(
+                makePhoto(1L, locationName = "Tokyo"),
+                makePhoto(2L, locationName = "Paris"),
+                makePhoto(3L, locationName = "Paris"),
+                makePhoto(4L, locationName = "Paris")
+            )
+            val places = awaitItem()
+            assertEquals("Paris", places[0].locationName) // 3 photos — first
+            assertEquals("Tokyo", places[1].locationName) // 1 photo — second
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun photosByPlace_excludesPhotosWithNoLocation() = runTest {
+        val vm = buildViewModel()
+        vm.photosByPlace.test {
+            awaitItem() // initial []
+            // Emit a photo with location so StateFlow reaches a non-empty state first
+            photosFlow.value = listOf(makePhoto(1L, locationName = "Paris"))
+            assertEquals(1, awaitItem().size)
+            // Replace with photos that have no location — StateFlow transitions back to empty
+            photosFlow.value = listOf(makePhoto(2L), makePhoto(3L))
+            assertTrue(awaitItem().isEmpty())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // ── selectPlace / clearPlaceSelection ────────────────────────────────────
+
+    @Test
+    fun selectPlace_setsSelectedPlace() = runTest {
+        val vm = buildViewModel()
+        vm.selectPlace("Paris")
+        assertEquals("Paris", vm.selectedPlace.value)
+    }
+
+    @Test
+    fun clearPlaceSelection_resetsToNull() = runTest {
+        val vm = buildViewModel()
+        vm.selectPlace("Paris")
+        vm.clearPlaceSelection()
+        assertNull(vm.selectedPlace.value)
+    }
+
+    @Test
+    fun initialSelectedPlace_isNull() = runTest {
+        val vm = buildViewModel()
+        assertNull(vm.selectedPlace.value)
     }
 }
