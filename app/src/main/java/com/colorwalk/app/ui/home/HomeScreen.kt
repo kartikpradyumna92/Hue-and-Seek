@@ -83,6 +83,7 @@ fun HomeScreen(
     onOpenCamera: () -> Unit,
     onOpenGallery: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenStats: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -253,8 +254,9 @@ fun HomeScreen(
 
             Spacer(Modifier.height(28.dp))
 
-            // Streak card
+            // Streak card — tappable to open Streaks & Stats
             Card(
+                onClick = onOpenStats,
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (state.capturedToday)

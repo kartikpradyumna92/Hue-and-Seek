@@ -24,8 +24,10 @@ import com.colorwalk.app.ui.home.HomeScreen
 import com.colorwalk.app.ui.onboarding.OnboardingScreen
 import com.colorwalk.app.ui.permission.PermissionRationaleScreen
 import com.colorwalk.app.ui.settings.SettingsScreen
+import com.colorwalk.app.ui.stats.StatsScreen
 import com.colorwalk.app.ui.theme.ColorWalkTheme
 import com.colorwalk.app.ui.theme.ThemeMode
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -34,6 +36,7 @@ class MainActivity : ComponentActivity() {
     private var _themeMode by mutableStateOf(ThemeMode.SYSTEM)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         NotificationHelper.createChannel(this)
@@ -132,7 +135,8 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
             HomeScreen(
                 onOpenCamera   = { navController.navigate("camera") },
                 onOpenGallery  = { navController.navigate("gallery") },
-                onOpenSettings = { navController.navigate("settings") }
+                onOpenSettings = { navController.navigate("settings") },
+                onOpenStats    = { navController.navigate("stats") }
             )
         }
 
@@ -149,6 +153,10 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
                 onBack        = { navController.popBackStack() },
                 onThemeChange = onThemeChange
             )
+        }
+
+        composable("stats") {
+            StatsScreen(onBack = { navController.popBackStack() })
         }
     }
 }

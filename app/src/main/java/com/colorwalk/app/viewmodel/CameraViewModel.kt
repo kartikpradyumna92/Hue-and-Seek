@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 import javax.inject.Inject
+import kotlinx.coroutines.flow.asStateFlow
 
 sealed class CaptureState {
     object Idle : CaptureState()
@@ -33,28 +34,35 @@ class CameraViewModel @Inject constructor(
     private val repo: PhotoRepository
 ) : ViewModel() {
 
-    val targetColor: WalkColor = colorForDay(System.currentTimeMillis())
+    private val _targetColor = MutableStateFlow(colorForDay(System.currentTimeMillis()))
+    val targetColor: StateFlow<WalkColor> = _targetColor.asStateFlow()
+
+    fun refreshTargetColor() {
+        _targetColor.value = colorForDay(System.currentTimeMillis())
+    }
 
     private val _captureState = MutableStateFlow<CaptureState>(CaptureState.Idle)
     val captureState: StateFlow<CaptureState> = _captureState
 
     fun onPhotoCaptured(bitmap: Bitmap) {
         _captureState.value = CaptureState.Processing
+        val color = _targetColor.value
         viewModelScope.launch {
-            _captureState.value = when (val result = repo.savePhoto(bitmap, targetColor)) {
-                is SaveResult.Success         -> CaptureState.Success(result.validation.dominantHex)
-                is SaveResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, targetColor.name, result.validation.actualDominantColor)
-                SaveResult.StorageError       -> CaptureState.StorageError
+            _captureState.value = when (val result = repo.savePhoto(bitmap, color)) {
+                is SaveResult.Success          -> CaptureState.Success(result.validation.dominantHex)
+                is SaveResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, color.name, result.validation.actualDominantColor)
+                SaveResult.StorageError        -> CaptureState.StorageError
             }
         }
     }
 
     fun onPhotoImported(uri: Uri) {
         _captureState.value = CaptureState.Processing
+        val color = _targetColor.value
         viewModelScope.launch {
-            _captureState.value = when (val result = repo.importPhoto(uri, targetColor)) {
+            _captureState.value = when (val result = repo.importPhoto(uri, color)) {
                 is ImportResult.Success          -> CaptureState.Success(result.validation.dominantHex)
-                is ImportResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, targetColor.name, result.validation.actualDominantColor)
+                is ImportResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, color.name, result.validation.actualDominantColor)
                 ImportResult.NoDateMetadata      -> CaptureState.ImportNoDate
                 is ImportResult.NotTakenToday    -> CaptureState.ImportWrongDay(result.dateTaken)
                 ImportResult.StorageError        -> CaptureState.StorageError

@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +27,7 @@ import android.net.Uri
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.viewmodel.AlbumSortOrder
 import com.colorwalk.app.viewmodel.GalleryViewModel
 import java.io.File as JavaFile
 import java.text.SimpleDateFormat
@@ -37,8 +39,17 @@ fun ColorAlbumScreen(
     viewModel: GalleryViewModel,
     onBack: () -> Unit
 ) {
-    val photos by viewModel.photosForColor.collectAsState()
+    val photos        by viewModel.photosForColor.collectAsState()
+    val albumSortOrder by viewModel.albumSortOrder.collectAsState()
     val accentColor = photos.firstOrNull()?.colorHex?.let { parseHexColor(it) } ?: Color.Gray
+
+    // Auto-pop when the last photo is deleted so the empty album doesn't linger.
+    // Guard: only trigger after we've seen at least one photo (avoids popping on initial load).
+    var hasSeenPhotos by remember { mutableStateOf(false) }
+    LaunchedEffect(photos) {
+        if (photos.isNotEmpty()) hasSeenPhotos = true
+        if (hasSeenPhotos && photos.isEmpty()) onBack()
+    }
 
     Column(
         modifier = Modifier
@@ -68,20 +79,67 @@ fun ColorAlbumScreen(
             )
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            contentPadding = PaddingValues(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        // Sort chips
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(photos, key = { it.id }) { photo ->
-                PhotoCard(
-                    photo = photo,
-                    accentColor = accentColor,
-                    onOpen = { viewModel.openPhoto(photo, photos) },
-                    onDelete = { viewModel.deletePhoto(photo) }
+            AlbumSortOrder.entries.forEach { order ->
+                FilterChip(
+                    selected = albumSortOrder == order,
+                    onClick = { viewModel.setAlbumSortOrder(order) },
+                    label = { Text(order.label, fontSize = 13.sp) }
                 )
             }
+        }
+
+        if (photos.isEmpty()) {
+            EmptyColorAlbum(colorName)
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(photos, key = { it.id }) { photo ->
+                    PhotoCard(
+                        photo = photo,
+                        accentColor = accentColor,
+                        onOpen = { viewModel.openPhoto(photo, photos) },
+                        onDelete = { viewModel.deletePhoto(photo) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyColorAlbum(colorName: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Default.PhotoLibrary,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                modifier = Modifier.size(64.dp)
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "No $colorName photos",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "All photos in this album have been deleted.",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                fontSize = 14.sp
+            )
         }
     }
 }

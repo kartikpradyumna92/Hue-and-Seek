@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.colorwalk.app.viewmodel.CameraViewModel
 import com.colorwalk.app.viewmodel.CaptureState
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -85,7 +87,17 @@ fun CameraScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val captureState by viewModel.captureState.collectAsState()
-    val targetColor = viewModel.targetColor
+    val targetColor by viewModel.targetColor.collectAsState()
+
+    // Refresh the target color on every resume so the camera never validates
+    // against yesterday's color when the app is kept alive past midnight.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshTargetColor()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }

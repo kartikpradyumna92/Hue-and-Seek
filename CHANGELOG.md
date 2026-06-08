@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.11.0] - 2026-06-08
+
+### Added
+- **Splash screen** — Android 12+ SplashScreen API via `core-splashscreen` compat library. Shows a white camera icon on a black background during cold start; transitions automatically to the app theme. Works on all API levels via the compat library.
+- **Gallery search (By Color)** — search bar at the top of the Color tab filters color folders by name in real time (case-insensitive). Clear button appears when the field is non-empty. Empty state updates contextually ("No colors matching 'X'").
+- **Gallery date filter (By Date)** — filter chips (All / This Month / Last 3 Months) on the Date tab narrow photos by capture date. Empty state reflects the active filter ("No photos in this period").
+- **Color album sort order** — Newest / Oldest sort chips inside each color album. Sort is applied in the ViewModel; changing it does not re-query Room.
+- **Adaptive launcher icon** — `ic_launcher_foreground.xml` (white camera + 4 colour palette dots, safe-zone-aware on 108dp canvas) and `ic_launcher_background.xml` (deep indigo `#3949AB`). `mipmap-anydpi-v26/` entries pick up the adaptive icon on Android 8+; PNG mipmaps remain as fallbacks for older devices.
+
+### Changed
+- **versionCode** bumped from 4 → 6; **versionName** from 1.9.0 → 1.11.0 (1.10.0 was previously released).
+
+---
+
 ## [1.10.0] - 2026-06-07
 
 ### Added

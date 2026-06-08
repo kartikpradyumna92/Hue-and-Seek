@@ -42,6 +42,14 @@ class PhotoRepository @Inject constructor(
     fun getPhotosByColor(colorName: String): Flow<List<PhotoEntity>> = dao.getPhotosByColor(colorName)
     fun getDistinctColors(): Flow<List<ColorSummary>> = dao.getDistinctColors()
 
+    suspend fun getAllPhotosSnapshot(): List<PhotoEntity> = withContext(Dispatchers.IO) {
+        dao.getAllPhotosSnapshot()
+    }
+
+    suspend fun getFavouriteColor(): ColorSummary? = withContext(Dispatchers.IO) {
+        dao.getFavouriteColor()
+    }
+
     suspend fun getStreak(): Int = withContext(Dispatchers.IO) {
         StreakCalculator.compute(dao.getRecentPhotoDates())
     }

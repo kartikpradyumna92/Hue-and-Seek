@@ -44,7 +44,18 @@ class CameraViewModelTest {
         assertEquals(
             "targetColor must equal colorForDay(now)",
             expected,
-            vm.targetColor
+            vm.targetColor.value   // targetColor is now a StateFlow
+        )
+    }
+
+    @Test
+    fun refreshTargetColor_valueRemainsEqualToColorForDayToday() {
+        val vm = buildViewModel()
+        vm.refreshTargetColor()
+        assertEquals(
+            "After refresh, targetColor must still equal colorForDay(now)",
+            colorForDay(System.currentTimeMillis()),
+            vm.targetColor.value
         )
     }
 
@@ -115,7 +126,7 @@ class CameraViewModelTest {
         assertTrue("Expected Failed state, got $state", state is CaptureState.Failed)
         with(state as CaptureState.Failed) {
             assertEquals(0.20f, matchPercent, 0.001f)
-            assertEquals(vm.targetColor.name, targetColorName)
+            assertEquals(vm.targetColor.value.name, targetColorName)
             assertEquals("Green", actualDominant)
         }
     }

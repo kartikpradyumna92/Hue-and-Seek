@@ -46,6 +46,9 @@ interface PhotoDao {
 
     @Query("DELETE FROM photos WHERE id NOT IN (SELECT MIN(id) FROM photos GROUP BY filePath)")
     suspend fun deleteFilepathDuplicates()
+
+    @Query("SELECT colorName, colorHex FROM photos GROUP BY colorName ORDER BY COUNT(*) DESC LIMIT 1")
+    suspend fun getFavouriteColor(): ColorSummary?
 }
 
 data class ColorSummary(

@@ -12,9 +12,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,6 +37,7 @@ import coil.request.ImageRequest
 import com.colorwalk.app.data.db.ColorSummary
 import java.io.File as JavaFile
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.viewmodel.DateFilter
 import com.colorwalk.app.viewmodel.GalleryViewMode
 import com.colorwalk.app.viewmodel.GalleryViewModel
 import java.text.SimpleDateFormat
@@ -44,12 +48,14 @@ fun GalleryScreen(
     onBack: () -> Unit,
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
-    val folders by viewModel.colorFolders.collectAsState()
-    val allPhotos by viewModel.allPhotos.collectAsState()
-    val viewMode by viewModel.viewMode.collectAsState()
+    val folders       by viewModel.colorFolders.collectAsState()
+    val allPhotos     by viewModel.allPhotos.collectAsState()
+    val viewMode      by viewModel.viewMode.collectAsState()
     val selectedColor by viewModel.selectedColor.collectAsState()
-    val viewerState by viewModel.viewerState.collectAsState()
-    var swipeDelta by remember { mutableFloatStateOf(0f) }
+    val viewerState   by viewModel.viewerState.collectAsState()
+    val searchQuery   by viewModel.searchQuery.collectAsState()
+    val dateFilter    by viewModel.dateFilter.collectAsState()
+    var swipeDelta    by remember { mutableFloatStateOf(0f) }
 
     // Full-screen viewer takes priority over everything
     if (viewerState != null) {
@@ -118,7 +124,7 @@ fun GalleryScreen(
             )
         }
 
-        // Tabs
+        // View mode tabs
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -137,12 +143,32 @@ fun GalleryScreen(
             )
         }
 
-        Spacer(Modifier.height(8.dp))
+        // Filter row — search bar in Color mode, date chips in Date mode
+        when (viewMode) {
+            GalleryViewMode.COLOR -> ColorSearchBar(
+                query = searchQuery,
+                onQueryChange = { viewModel.setSearchQuery(it) },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+            GalleryViewMode.DATE -> DateFilterRow(
+                selected = dateFilter,
+                onSelect = { viewModel.setDateFilter(it) },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
 
         val isEmpty = if (viewMode == GalleryViewMode.COLOR) folders.isEmpty() else allPhotos.isEmpty()
 
         if (isEmpty) {
-            EmptyGallery()
+            val (message, sub) = when {
+                viewMode == GalleryViewMode.COLOR && searchQuery.isNotBlank() ->
+                    Pair("No colors matching\n\"$searchQuery\"", "Try a different search term")
+                viewMode == GalleryViewMode.DATE && dateFilter != DateFilter.ALL ->
+                    Pair("No photos in this period", "Try a different time range")
+                else ->
+                    Pair("No photos yet", "Start your first color walk!")
+            }
+            EmptyGallery(message, sub)
         } else {
             when (viewMode) {
                 GalleryViewMode.COLOR -> ColorFolderGrid(folders, onColorClick = { viewModel.selectColor(it) })
@@ -152,6 +178,51 @@ fun GalleryScreen(
                     onOpen = { viewModel.openPhoto(it, allPhotos) }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ColorSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier.fillMaxWidth(),
+        placeholder = { Text("Search colors…", fontSize = 13.sp) },
+        leadingIcon = {
+            Icon(Icons.Default.Search, contentDescription = null,
+                modifier = Modifier.size(18.dp))
+        },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(Icons.Default.Clear, contentDescription = "Clear search",
+                        modifier = Modifier.size(18.dp))
+                }
+            }
+        },
+        singleLine = true,
+        shape = RoundedCornerShape(50)
+    )
+}
+
+@Composable
+private fun DateFilterRow(
+    selected: DateFilter,
+    onSelect: (DateFilter) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        DateFilter.entries.forEach { filter ->
+            FilterChip(
+                selected = selected == filter,
+                onClick = { onSelect(filter) },
+                label = { Text(filter.label, fontSize = 13.sp) }
+            )
         }
     }
 }
@@ -322,9 +393,15 @@ private fun DatePhotoCard(photo: PhotoEntity, onOpen: () -> Unit, onDelete: () -
 }
 
 @Composable
-private fun EmptyGallery() {
+private fun EmptyGallery(
+    message: String = "No photos yet",
+    sub: String = "Start your first color walk!"
+) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 32.dp)
+        ) {
             Icon(
                 Icons.Default.PhotoLibrary,
                 contentDescription = null,
@@ -332,8 +409,18 @@ private fun EmptyGallery() {
                 modifier = Modifier.size(72.dp)
             )
             Spacer(Modifier.height(16.dp))
-            Text("No photos yet", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f), fontSize = 18.sp)
-            Text("Start your first color walk!", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f), fontSize = 14.sp)
+            Text(
+                message,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                fontSize = 18.sp,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                sub,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
