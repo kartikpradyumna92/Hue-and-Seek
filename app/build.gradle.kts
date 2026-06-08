@@ -14,8 +14,8 @@ android {
         applicationId = "com.colorwalk.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.11.0"
+        versionCode = 7
+        versionName = "1.11.1"
     }
 
     buildTypes {

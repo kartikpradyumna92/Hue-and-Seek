@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.11.1] - 2026-06-08
+
+### Fixed
+- **Blank photo tiles after reinstall** — after a fresh reinstall where Android Auto Backup restores the Room database but wipes `filesDir/photos/`, `syncGalleryWithDatabase()` Pass 2 was building `existingFilenames` from all DB rows regardless of whether the file existed on disk. This caused MediaStore entries to be skipped even when their private file was missing, so every photo tile loaded as a blank placeholder. Fixed by partitioning DB rows into existing-on-disk vs. missing-from-disk; missing rows are now recovered from MediaStore via `copyMediaUriToPrivateStorage()` and the existing DB row is updated with `dao.updateFilePath()` instead of inserting a duplicate.
+
+---
+
 ## [1.11.0] - 2026-06-08
 
 ### Added

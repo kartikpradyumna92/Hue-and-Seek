@@ -186,15 +186,29 @@ class PhotoRepository @Inject constructor(
         }
 
         // ── Pass 2: MediaStore scan — recovery for fresh reinstalls ─────────────────
-        // Build filename set from the DB snapshot for a second dedup guard (see below).
-        val existingFilenames = allDbPhotos
+        // Split DB rows into those whose private file is present on disk vs. missing.
+        // A row with a content:// path is treated as "existing" — Pass 1 above handles it.
+        val (existingRows, missingRows) = allDbPhotos.partition { photo ->
+            !photo.filePath.startsWith("/") || File(photo.filePath).exists()
+        }
+
+        // Skip MediaStore entries whose file is already on disk.
+        val existingFilenames = existingRows
             .map { File(it.filePath).name }
             .filter { it.startsWith("ColorWalk_") }
             .toHashSet()
 
-        val allExistingDates = dao.getAllPhotoDates()
+        // For rows whose private file is gone, map filename → entity so we can
+        // re-copy from MediaStore and UPDATE the existing row instead of inserting a duplicate.
+        val missingByFilename: Map<String, PhotoEntity> = missingRows
+            .filter { it.filePath.startsWith("/") }
+            .associateBy { File(it.filePath).name }
+            .filterKeys { it.startsWith("ColorWalk_") }
+
         // existingTimestamps: dedup guard so a re-sync never inserts the same photo twice.
-        val existingTimestamps = allExistingDates.toHashSet()
+        val existingTimestamps = existingRows.map { it.dateTaken }.toHashSet()
+
+        val allExistingDates = dao.getAllPhotoDates()
         // existingDays: still needed to trigger content:// URI migration for known days.
         val existingDays = allExistingDates
             .map { StreakCalculator.epochMillisToDayIndex(it) }
@@ -254,20 +268,26 @@ class PhotoRepository @Inject constructor(
                     if (existingId != null) migrateToPrivateStorage(existingId, name, mediaUri)
                 }
 
-                // Skip if this file is already in the DB by name. This catches the case where
-                // MediaStore returns DATE_TAKEN in seconds (some OEM/API variants), causing
-                // parseDateFromFilename to produce a second-aligned timestamp that doesn't
-                // match the millisecond-precise value stored in the DB — which would otherwise
-                // cause the same photo to be re-inserted on every sync.
+                // File already on disk → nothing to do.
                 if (name in existingFilenames) continue
 
-                // Skip if exact millisecond timestamp already in DB (primary guard for
-                // reinstall recovery and within-Pass-2 dedup after the first insert).
+                // DB row exists but private file was lost (e.g. reinstall wiped filesDir).
+                // Re-copy from MediaStore and UPDATE the existing row; never insert a duplicate.
+                val missingEntity = missingByFilename[name]
+                if (missingEntity != null) {
+                    val recovered = copyMediaUriToPrivateStorage(name, mediaUri)
+                    if (recovered != null) {
+                        dao.updateFilePath(missingEntity.id, recovered.absolutePath)
+                        existingFilenames.add(name)
+                        existingTimestamps.add(missingEntity.dateTaken)
+                    }
+                    continue
+                }
+
+                // Skip if exact millisecond timestamp already in DB (primary dedup guard).
                 if (dateTaken in existingTimestamps) continue
 
-                // Photo not in DB — recover it. This handles fresh reinstalls AND the case
-                // where multiple photos were taken on the same day (previously only the first
-                // was recovered because existingDays.add(day) blocked the rest).
+                // Genuinely new photo — recover it (fresh reinstall, or first sync).
                 val privateFile = copyMediaUriToPrivateStorage(name, mediaUri)
                 val color = colorForDay(dateTaken)
                 dao.insert(
