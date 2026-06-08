@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — Hue & Seek</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0d0d0d;
+      color: #e8e8e8;
+      line-height: 1.7;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      padding: 3rem 0 2.5rem;
+      border-bottom: 1px solid #222;
+      margin-bottom: 2.5rem;
+    }
+
+    .wordmark {
+      font-size: 2rem;
+      font-weight: 700;
+      background: linear-gradient(90deg, #ff6b35, #f7c948, #43a047, #1e88e5, #8e24aa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.5px;
+    }
+
+    header p {
+      margin-top: 0.5rem;
+      color: #777;
+      font-size: 0.9rem;
+    }
+
+    h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #f0f0f0;
+      margin: 2rem 0 0.6rem;
+      letter-spacing: 0.02em;
+    }
+
+    p, li {
+      font-size: 0.95rem;
+      color: #bbb;
+    }
+
+    ul {
+      padding-left: 1.4rem;
+      margin-top: 0.4rem;
+    }
+
+    li { margin-bottom: 0.3rem; }
+
+    .card {
+      background: #161616;
+      border: 1px solid #222;
+      border-radius: 12px;
+      padding: 1.2rem 1.4rem;
+      margin-top: 0.6rem;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 99px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    .badge-on  { background: #1a3a1a; color: #4caf50; border: 1px solid #2e6b2e; }
+    .badge-off { background: #2a1a1a; color: #ef5350; border: 1px solid #6b2e2e; }
+
+    .highlight {
+      background: #1a2a1a;
+      border: 1px solid #2e6b2e;
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      margin-top: 1rem;
+      color: #a5d6a7;
+      font-size: 0.9rem;
+    }
+
+    a { color: #64b5f6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #222;
+      text-align: center;
+      font-size: 0.82rem;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <div class="wordmark">Hue &amp; Seek</div>
+    <p>Privacy Policy &mdash; effective June 7, 2026</p>
+  </header>
+
+  <p>
+    Hue &amp; Seek is a daily color-walk app made by Karteek Pradyumna Bulusu. This policy explains what
+    information the app accesses, how it is used, and what leaves your device.
+  </p>
+
+  <div class="highlight">
+    <strong>Short version:</strong> all your data stays on your device. Hue &amp; Seek does not operate
+    any servers, does not collect analytics, and does not share anything with third parties.
+  </div>
+
+  <!-- ── What the app accesses ── -->
+  <h2>What the app accesses</h2>
+
+  <div class="card">
+    <p><span class="badge badge-on">Used</span><strong>Camera</strong></p>
+    <p style="margin-top:0.4rem">
+      The camera is used solely to capture your daily color-walk photo. Photos are saved to your
+      device's private app storage and optionally copied to your device gallery
+      (<code>Pictures/ColorWalk</code>). No images are transmitted anywhere.
+    </p>
+  </div>
+
+  <div class="card" style="margin-top:0.8rem">
+    <p><span class="badge badge-on">Optional</span><strong>Precise location (GPS)</strong></p>
+    <p style="margin-top:0.4rem">
+      Location is requested only at the moment you capture a photo. It is used to:
+    </p>
+    <ul style="margin-top:0.5rem">
+      <li>Reverse-geocode a readable label (e.g. "Sunnyvale, California") stored with the photo.</li>
+      <li>Embed GPS EXIF tags in the gallery copy so Google Photos can display the location.</li>
+    </ul>
+    <p style="margin-top:0.5rem">
+      Location data is stored locally in the app's database. It is never sent to any server or
+      shared with any third party. You can deny location permission and the app will work normally
+      without it; photos will simply have no location label.
+    </p>
+  </div>
+
+  <div class="card" style="margin-top:0.8rem">
+    <p><span class="badge badge-on">Optional</span><strong>Photo library (read)</strong></p>
+    <p style="margin-top:0.4rem">
+      Read access to your photo library is used to:
+    </p>
+    <ul style="margin-top:0.5rem">
+      <li>Let you import a photo from your gallery instead of taking one in-app.</li>
+      <li>Recover your streak and photo history after a reinstall by scanning for
+          <code>ColorWalk_*</code> files you previously saved.</li>
+    </ul>
+    <p style="margin-top:0.5rem">
+      The app only reads files whose name begins with <code>ColorWalk_</code>. It does not access
+      or read any other photos on your device.
+    </p>
+  </div>
+
+  <div class="card" style="margin-top:0.8rem">
+    <p><span class="badge badge-on">Optional</span><strong>Notifications</strong></p>
+    <p style="margin-top:0.4rem">
+      If you grant notification permission, the app can send up to two daily reminders (morning
+      and evening) to complete your color walk. Reminders are sent only if you have not already
+      captured a photo that day. All notification scheduling happens locally on your device using
+      Android's AlarmManager.
+    </p>
+  </div>
+
+  <!-- ── What the app does NOT do ── -->
+  <h2>What the app does not do</h2>
+  <ul>
+    <li><span class="badge badge-off">Never</span> Transmit photos, location, or any personal data to a server.</li>
+    <li><span class="badge badge-off">Never</span> Collect analytics, crash reports, or usage statistics.</li>
+    <li><span class="badge badge-off">Never</span> Use advertising SDKs or sell data to any third party.</li>
+    <li><span class="badge badge-off">Never</span> Access contacts, microphone, calendar, or any other sensor.</li>
+    <li><span class="badge badge-off">Never</span> Require an account or any form of sign-in.</li>
+  </ul>
+
+  <!-- ── Data storage ── -->
+  <h2>Data storage and retention</h2>
+  <p>
+    All data (photo metadata, streak count, settings) is stored locally on your device using
+    Android's Room database and SharedPreferences. It is cleared when you uninstall the app.
+    The app supports Android Auto Backup so your settings and streak can be restored after a
+    reinstall, using your existing Google account's encrypted backup — the same mechanism Android
+    uses for all apps.
+  </p>
+
+  <!-- ── Children ── -->
+  <h2>Children's privacy</h2>
+  <p>
+    Hue &amp; Seek is not directed at children under 13. The app collects no personal information
+    in any form, so no special handling is required.
+  </p>
+
+  <!-- ── Changes ── -->
+  <h2>Changes to this policy</h2>
+  <p>
+    If the app's data practices change materially, this page will be updated and the effective date
+    will be revised. Continued use of the app after a change constitutes acceptance of the updated policy.
+  </p>
+
+  <!-- ── Contact ── -->
+  <h2>Contact</h2>
+  <p>
+    Questions or requests regarding this privacy policy:
+    <a href="mailto:kartikpradyumna@gmail.com">kartikpradyumna@gmail.com</a>
+  </p>
+
+  <footer>
+    &copy; 2026 Karteek Pradyumna Bulusu &mdash; Hue &amp; Seek
+  </footer>
+
+</div>
+</body>
+</html>

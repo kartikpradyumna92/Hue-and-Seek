@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.10.0] - 2026-06-07
+
+### Added
+- **Privacy policy** — hosted at `https://kartikpradyumna92.github.io/Hue-and-Seek/` via GitHub Pages (`docs/index.html`). Covers camera, location, photo library, and notifications; confirms no server uploads or third-party sharing.
+
+### Fixed
+- **Gallery shows every photo twice** — `syncGalleryWithDatabase()` deduped MediaStore entries by millisecond-exact timestamp. Some Android OEMs return `DATE_TAKEN` in seconds, causing the filename-fallback parser to produce a second-aligned timestamp that didn't match the DB value, so the same photo was re-inserted on every sync. Added a filename-based dedup guard (`existingFilenames` set built from the current DB snapshot) and a Pass 0 SQL dedup (`DELETE … WHERE id NOT IN (SELECT MIN(id) … GROUP BY filePath)`) that cleans existing duplicate rows on first launch.
+- **Deleted photos reappear after next launch** — `deletePhoto` checked `Uri.parse(filePath).scheme == "file"` to detect private files, but bare absolute paths (the common case since v1.8.0) have a null scheme, so the private file was never actually deleted. The orphaned private file and MediaStore entry caused Pass 2 to re-insert the photo on the next sync. Fixed by branching on `path.startsWith("/")` for absolute paths, deleting via `File.delete()`, and calling a new `deleteFromMediaStore(filename)` helper to remove the MediaStore copy.
+
+---
+
 ## [1.9.0] - 2026-06-07
 
 ### Added

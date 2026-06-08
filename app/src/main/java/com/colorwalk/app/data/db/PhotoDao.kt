@@ -43,6 +43,9 @@ interface PhotoDao {
 
     @Query("DELETE FROM photos WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM photos WHERE id NOT IN (SELECT MIN(id) FROM photos GROUP BY filePath)")
+    suspend fun deleteFilepathDuplicates()
 }
 
 data class ColorSummary(

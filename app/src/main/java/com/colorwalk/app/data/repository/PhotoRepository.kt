@@ -143,6 +143,12 @@ class PhotoRepository @Inject constructor(
      */
     suspend fun syncGalleryWithDatabase() = withContext(Dispatchers.IO) {
 
+        // ── Pass 0: deduplicate existing DB rows by filePath ─────────────────────────
+        // Fixes duplicates already in the DB (e.g. from a sync that ran before the
+        // filename-based dedup guard was in place). For each filePath that appears more
+        // than once, keep only the row with the lowest id.
+        dao.deleteFilepathDuplicates()
+
         // ── Pass 1: directly migrate content:// URIs already stored in the DB ────────
         val allDbPhotos = dao.getAllPhotosSnapshot()
         for (photo in allDbPhotos) {
@@ -172,6 +178,12 @@ class PhotoRepository @Inject constructor(
         }
 
         // ── Pass 2: MediaStore scan — recovery for fresh reinstalls ─────────────────
+        // Build filename set from the DB snapshot for a second dedup guard (see below).
+        val existingFilenames = allDbPhotos
+            .map { File(it.filePath).name }
+            .filter { it.startsWith("ColorWalk_") }
+            .toHashSet()
+
         val allExistingDates = dao.getAllPhotoDates()
         // existingTimestamps: dedup guard so a re-sync never inserts the same photo twice.
         val existingTimestamps = allExistingDates.toHashSet()
@@ -234,8 +246,15 @@ class PhotoRepository @Inject constructor(
                     if (existingId != null) migrateToPrivateStorage(existingId, name, mediaUri)
                 }
 
-                // Skip if this exact photo is already in the DB (guards against re-inserting
-                // on a second sync and also skips photos just handled by the migration path).
+                // Skip if this file is already in the DB by name. This catches the case where
+                // MediaStore returns DATE_TAKEN in seconds (some OEM/API variants), causing
+                // parseDateFromFilename to produce a second-aligned timestamp that doesn't
+                // match the millisecond-precise value stored in the DB — which would otherwise
+                // cause the same photo to be re-inserted on every sync.
+                if (name in existingFilenames) continue
+
+                // Skip if exact millisecond timestamp already in DB (primary guard for
+                // reinstall recovery and within-Pass-2 dedup after the first insert).
                 if (dateTaken in existingTimestamps) continue
 
                 // Photo not in DB — recover it. This handles fresh reinstalls AND the case
@@ -275,18 +294,39 @@ class PhotoRepository @Inject constructor(
         } catch (_: Exception) { }
     }
 
-    /** Deletes a photo from the app DB and storage (private file or MediaStore). */
+    /** Deletes a photo from the app DB, private storage, and MediaStore. */
     suspend fun deletePhoto(photo: PhotoEntity) = withContext(Dispatchers.IO) {
         try {
-            val uri = Uri.parse(photo.filePath)
-            if (uri.scheme == "file") {
-                val path = uri.path
-                if (path != null) File(path).delete()
-            } else {
-                context.contentResolver.delete(uri, null, null)
+            val path = photo.filePath
+            when {
+                path.startsWith("/") -> {
+                    // Bare absolute path (the common case since v1.8.0)
+                    val file = File(path)
+                    file.delete()
+                    // Remove the matching MediaStore entry so sync doesn't re-insert it.
+                    deleteFromMediaStore(file.name)
+                }
+                else -> {
+                    val uri = Uri.parse(path)
+                    when (uri.scheme) {
+                        "file" -> uri.path?.let { File(it).delete() }
+                        "content" -> context.contentResolver.delete(uri, null, null)
+                    }
+                }
             }
         } catch (_: Exception) {}
         dao.deleteById(photo.id)
+    }
+
+    private fun deleteFromMediaStore(filename: String) {
+        if (!filename.startsWith("ColorWalk_")) return
+        try {
+            context.contentResolver.delete(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                "${MediaStore.Images.Media.DISPLAY_NAME} = ?",
+                arrayOf(filename)
+            )
+        } catch (_: Exception) {}
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
