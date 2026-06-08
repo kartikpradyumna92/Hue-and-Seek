@@ -25,37 +25,67 @@ fun SettingsScreen(
     onThemeChange: (ThemeMode) -> Unit
 ) {
     val context = LocalContext.current
+    val versionName = remember {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+    }
 
-    var selectedTheme by remember { mutableStateOf(NotificationPrefs.getThemeMode(context)) }
+    var selectedTheme       by remember { mutableStateOf(NotificationPrefs.getThemeMode(context)) }
     var notificationsEnabled by remember { mutableStateOf(NotificationPrefs.isEnabled(context)) }
-    var showTimePicker by remember { mutableStateOf(false) }
+    var morningEnabled      by remember { mutableStateOf(NotificationPrefs.isMorningEnabled(context)) }
+    var eveningEnabled      by remember { mutableStateOf(NotificationPrefs.isEveningEnabled(context)) }
+    var morningHour         by remember { mutableIntStateOf(NotificationPrefs.getMorningHour(context)) }
+    var morningMinute       by remember { mutableIntStateOf(NotificationPrefs.getMorningMinute(context)) }
+    var eveningHour         by remember { mutableIntStateOf(NotificationPrefs.getEveningHour(context)) }
+    var eveningMinute       by remember { mutableIntStateOf(NotificationPrefs.getEveningMinute(context)) }
+    var showMorningPicker   by remember { mutableStateOf(false) }
+    var showEveningPicker   by remember { mutableStateOf(false) }
 
-    if (showTimePicker) {
-        val timePickerState = rememberTimePickerState(
-            initialHour = NotificationPrefs.getHour(context),
-            initialMinute = NotificationPrefs.getMinute(context)
-        )
+    if (showMorningPicker) {
+        val pickerState = rememberTimePickerState(initialHour = morningHour, initialMinute = morningMinute)
         AlertDialog(
-            onDismissRequest = { showTimePicker = false },
+            onDismissRequest = { showMorningPicker = false },
             properties = DialogProperties(usePlatformDefaultWidth = false),
             modifier = Modifier.widthIn(min = 280.dp),
-            title = { Text("Reminder time") },
-            text = { TimePicker(state = timePickerState) },
+            title = { Text("Morning reminder") },
+            text = { TimePicker(state = pickerState) },
             confirmButton = {
                 TextButton(onClick = {
-                    NotificationPrefs.set(context, timePickerState.hour, timePickerState.minute)
-                    if (notificationsEnabled) AlarmScheduler.scheduleDaily(context)
-                    showTimePicker = false
+                    morningHour = pickerState.hour
+                    morningMinute = pickerState.minute
+                    NotificationPrefs.setMorning(context, pickerState.hour, pickerState.minute)
+                    if (notificationsEnabled && morningEnabled) AlarmScheduler.scheduleMorning(context)
+                    showMorningPicker = false
                 }) { Text("Set") }
             },
             dismissButton = {
-                TextButton(onClick = { showTimePicker = false }) { Text("Cancel") }
+                TextButton(onClick = { showMorningPicker = false }) { Text("Cancel") }
             }
         )
     }
 
-    // Surface (not a background modifier) so LocalContentColor is set to onBackground —
-    // all child Text/Icon composables then auto-adapt their color to the selected theme.
+    if (showEveningPicker) {
+        val pickerState = rememberTimePickerState(initialHour = eveningHour, initialMinute = eveningMinute)
+        AlertDialog(
+            onDismissRequest = { showEveningPicker = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+            modifier = Modifier.widthIn(min = 280.dp),
+            title = { Text("Evening reminder") },
+            text = { TimePicker(state = pickerState) },
+            confirmButton = {
+                TextButton(onClick = {
+                    eveningHour = pickerState.hour
+                    eveningMinute = pickerState.minute
+                    NotificationPrefs.setEvening(context, pickerState.hour, pickerState.minute)
+                    if (notificationsEnabled && eveningEnabled) AlarmScheduler.scheduleEvening(context)
+                    showEveningPicker = false
+                }) { Text("Set") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEveningPicker = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -65,94 +95,89 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-        // Top bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.Default.ArrowBack,
-                    contentDescription = "Back",
-                    tint = MaterialTheme.colorScheme.onBackground
-                )
-            }
-            Text(
-                "Settings",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 4.dp)
-            )
-        }
-
-        Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-
-            // ── Display ──────────────────────────────────────────────────────
-            SettingsSectionHeader("Display")
-
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth()
+            // Top bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "Theme",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    ThemeSelector(
-                        selected = selectedTheme,
-                        onSelect = { mode ->
-                            selectedTheme = mode
-                            NotificationPrefs.setThemeMode(context, mode)
-                            onThemeChange(mode)
-                        }
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.Default.ArrowBack,
+                        contentDescription = "Back",
+                        tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
+                Text(
+                    "Settings",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
 
-            // ── Notifications ─────────────────────────────────────────────────
-            SettingsSectionHeader("Notifications")
+                // ── About ─────────────────────────────────────────────────────
+                SettingsSectionHeader("About")
 
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column {
-                    // Toggle row
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Daily reminder", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "Reminds you to complete today's color walk",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                            )
-                        }
-                        Switch(
-                            checked = notificationsEnabled,
-                            onCheckedChange = { enabled ->
-                                notificationsEnabled = enabled
-                                NotificationPrefs.setEnabled(context, enabled)
-                                if (enabled) AlarmScheduler.scheduleDaily(context)
-                                else AlarmScheduler.cancel(context)
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Hue & Seek", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "A daily color walk — find today's color in the world around you.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            lineHeight = 18.sp
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Version $versionName",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(24.dp))
+
+                // ── Display ──────────────────────────────────────────────────
+                SettingsSectionHeader("Display")
+
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Theme", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(12.dp))
+                        ThemeSelector(
+                            selected = selectedTheme,
+                            onSelect = { mode ->
+                                selectedTheme = mode
+                                NotificationPrefs.setThemeMode(context, mode)
+                                onThemeChange(mode)
                             }
                         )
                     }
+                }
 
-                    // Time row — only when enabled
-                    if (notificationsEnabled) {
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                Spacer(Modifier.height(24.dp))
+
+                // ── Notifications ─────────────────────────────────────────────
+                SettingsSectionHeader("Notifications")
+
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        // Master toggle
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -160,23 +185,98 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Reminder time", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                                Text("Daily reminders", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    formatTime(NotificationPrefs.getHour(context), NotificationPrefs.getMinute(context)),
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.primary
+                                    "Notified only if you haven't completed today's walk",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                    lineHeight = 16.sp
                                 )
                             }
-                            TextButton(onClick = { showTimePicker = true }) {
-                                Text("Change")
-                            }
+                            Spacer(Modifier.width(12.dp))
+                            Switch(
+                                checked = notificationsEnabled,
+                                onCheckedChange = { enabled ->
+                                    notificationsEnabled = enabled
+                                    NotificationPrefs.setEnabled(context, enabled)
+                                    if (enabled) AlarmScheduler.scheduleBoth(context)
+                                    else AlarmScheduler.cancel(context)
+                                }
+                            )
+                        }
+
+                        if (notificationsEnabled) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+                            // Morning row
+                            ReminderSlotRow(
+                                label      = "Morning",
+                                hour       = morningHour,
+                                minute     = morningMinute,
+                                enabled    = morningEnabled,
+                                onToggle   = { on ->
+                                    morningEnabled = on
+                                    NotificationPrefs.setMorningEnabled(context, on)
+                                    if (on) AlarmScheduler.scheduleMorning(context)
+                                    else AlarmScheduler.cancelMorning(context)
+                                },
+                                onChangeTap = { showMorningPicker = true }
+                            )
+
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+                            // Evening row
+                            ReminderSlotRow(
+                                label      = "Evening",
+                                hour       = eveningHour,
+                                minute     = eveningMinute,
+                                enabled    = eveningEnabled,
+                                onToggle   = { on ->
+                                    eveningEnabled = on
+                                    NotificationPrefs.setEveningEnabled(context, on)
+                                    if (on) AlarmScheduler.scheduleEvening(context)
+                                    else AlarmScheduler.cancelEvening(context)
+                                },
+                                onChangeTap = { showEveningPicker = true }
+                            )
                         }
                     }
                 }
             }
         }
     }
-    } // Surface
+}
+
+@Composable
+private fun ReminderSlotRow(
+    label: String,
+    hour: Int,
+    minute: Int,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onChangeTap: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                formatTime(hour, minute),
+                fontSize = 13.sp,
+                color = if (enabled) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+            )
+        }
+        TextButton(
+            onClick = onChangeTap,
+            enabled = enabled
+        ) { Text("Change") }
+        Switch(checked = enabled, onCheckedChange = onToggle)
+    }
 }
 
 @Composable

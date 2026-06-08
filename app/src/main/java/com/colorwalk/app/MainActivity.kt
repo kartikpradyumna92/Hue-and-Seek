@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         NotificationHelper.createChannel(this)
         _themeMode = NotificationPrefs.getThemeMode(this)
-        if (NotificationPrefs.isEnabled(this)) AlarmScheduler.scheduleDaily(this)
+        if (NotificationPrefs.isEnabled(this)) AlarmScheduler.scheduleBoth(this)
 
         setContent {
             ColorWalkTheme(themeMode = _themeMode) {

@@ -10,6 +10,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
@@ -25,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -132,6 +134,8 @@ fun HomeScreen(
         label = "colorAnim"
     )
 
+    var swipeDelta by remember { mutableFloatStateOf(0f) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -140,6 +144,21 @@ fun HomeScreen(
                     listOf(animatedColor.copy(alpha = 0.25f), MaterialTheme.colorScheme.background)
                 )
             )
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { swipeDelta = 0f },
+                    onDragEnd = {
+                        val threshold = 80.dp.toPx()
+                        if (swipeDelta > threshold) onOpenCamera()
+                        else if (swipeDelta < -threshold) onOpenGallery()
+                        swipeDelta = 0f
+                    },
+                    onDragCancel = { swipeDelta = 0f }
+                ) { change, dragAmount ->
+                    change.consume()
+                    swipeDelta += dragAmount
+                }
+            }
     ) {
         Column(
             modifier = Modifier

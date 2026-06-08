@@ -55,6 +55,13 @@ class GalleryViewModel @Inject constructor(
 
     fun closePhoto() { _viewerState.value = null }
 
+    fun rotatePhoto(photo: PhotoEntity, onDone: () -> Unit) {
+        viewModelScope.launch {
+            repo.rotatePhoto(photo)
+            onDone()
+        }
+    }
+
     fun deletePhoto(photo: PhotoEntity) {
         viewModelScope.launch {
             repo.deletePhoto(photo)

@@ -3,6 +3,7 @@ package com.colorwalk.app.ui.camera
 import android.Manifest
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.media.ExifInterface
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
@@ -243,9 +244,30 @@ fun CameraScreen(
                                         val buffer = proxy.planes[0].buffer
                                         val bytes = ByteArray(buffer.remaining())
                                         buffer.get(bytes)
+                                        val cameraXRotation = proxy.imageInfo.rotationDegrees
                                         proxy.close()
-                                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                        var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                             ?: return
+                                        // Prefer EXIF orientation embedded in the JPEG by the camera HAL
+                                        // (reflects actual device orientation at capture time). Fall back
+                                        // to CameraX rotationDegrees only if EXIF tag is absent.
+                                        val exifOrientation = try {
+                                            ExifInterface(bytes.inputStream())
+                                                .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED)
+                                        } catch (_: Exception) { ExifInterface.ORIENTATION_UNDEFINED }
+                                        val rotation = when (exifOrientation) {
+                                            ExifInterface.ORIENTATION_ROTATE_90  -> 90f
+                                            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                                            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                                            ExifInterface.ORIENTATION_NORMAL     -> 0f
+                                            else -> cameraXRotation.toFloat()
+                                        }
+                                        if (rotation != 0f) {
+                                            val matrix = android.graphics.Matrix().apply { postRotate(rotation) }
+                                            val rotated = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+                                            bmp.recycle()
+                                            bmp = rotated
+                                        }
                                         viewModel.onPhotoCaptured(bmp)
                                     }
                                     override fun onError(e: ImageCaptureException) {

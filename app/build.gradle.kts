@@ -14,8 +14,8 @@ android {
         applicationId = "com.colorwalk.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.8.0"
+        versionCode = 4
+        versionName = "1.9.0"
     }
 
     buildTypes {
@@ -88,8 +88,7 @@ dependencies {
     implementation(libs.coroutines.play.services)
     implementation(libs.datastore)
     implementation(libs.accompanist.permissions)
-    implementation(libs.glance.appwidget)
-    implementation(libs.play.review)
+implementation(libs.play.review)
     implementation(libs.konfetti.compose)
 
     // Unit test dependencies

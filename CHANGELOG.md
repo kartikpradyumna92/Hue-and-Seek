@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.9.0] - 2026-06-07
+
+### Added
+- **Swipe navigation** — swipe right from Home to open Camera, swipe left to open Gallery. Inside Gallery, swipe left (By Color) to switch to By Date, swipe right (By Date) to switch back to By Color, swipe right (By Color) to return to Home. Creates a linear navigation chain: Home ↔ By Color ↔ By Date.
+- **About section in Settings** — shows a one-liner description of the app and the current version number. Appears at the top of the Settings screen.
+- **Per-slot notification controls** — each daily reminder (Morning and Evening) can be individually toggled on/off and given its own custom time via an inline time picker. The master toggle still controls all reminders at once.
+- **GPS location in Google Photos** — photos captured in the app now embed GPS EXIF tags in the system gallery copy, so Google Photos shows the location automatically.
+
+### Changed
+- **Daily reminders changed from one to two** — reminders now fire at 10:00 AM and 5:00 PM (configurable) instead of a single user-set time. Each slot fires only if the day's color walk has not yet been completed.
+
+### Fixed
+- **Portrait photos saved as landscape** — `proxy.imageInfo.rotationDegrees` is based on the static `targetRotation` value set at camera build time, which never updates as the device rotates. Switched to reading the EXIF orientation tag written directly into the JPEG bytes by the camera HAL at capture time; `rotationDegrees` is used only as a fallback when EXIF is absent.
+- **Imported photos displayed without rotation correction** — `decodeBitmapFromUri` decoded the bitmap but never read or applied EXIF orientation. It now opens the stream a second time to read EXIF and applies the same rotation logic used for in-app captures.
+- **Multiple photos on the same day not recovered after reinstall** — `syncGalleryWithDatabase()` used a day-index set to deduplicate MediaStore entries. After recovering the first photo for a given day it added that day to the set, causing all remaining photos from that day to be skipped. The dedup guard is now a millisecond-timestamp set so each distinct photo is independently recoverable.
+
+---
+
 ## [1.8.0] - 2026-06-03
 
 ### Fixed

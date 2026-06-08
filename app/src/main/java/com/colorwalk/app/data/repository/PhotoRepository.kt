@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.location.Geocoder
 import android.media.ExifInterface
 import android.net.Uri
@@ -77,11 +78,11 @@ class PhotoRepository @Inject constructor(
             val privateFile = saveToPrivateStorage(bitmap, filename)
                 ?: return@withContext SaveResult.StorageError
 
-            // Secondary: also publish to the system gallery (best-effort; display doesn't depend on this).
-            publishToSystemGallery(bitmap, filename, now)
-
             val (lat, lon) = getLastLocation()
             val locationName = reverseGeocode(lat, lon)
+
+            // Secondary: publish to system gallery with GPS EXIF so Google Photos shows location.
+            publishToSystemGallery(bitmap, filename, now, lat, lon)
             dao.insert(
                 PhotoEntity(
                     filePath = privateFile.absolutePath,   // absolute path — passed as File to Coil
@@ -171,7 +172,11 @@ class PhotoRepository @Inject constructor(
         }
 
         // ── Pass 2: MediaStore scan — recovery for fresh reinstalls ─────────────────
-        val existingDays = dao.getAllPhotoDates()
+        val allExistingDates = dao.getAllPhotoDates()
+        // existingTimestamps: dedup guard so a re-sync never inserts the same photo twice.
+        val existingTimestamps = allExistingDates.toHashSet()
+        // existingDays: still needed to trigger content:// URI migration for known days.
+        val existingDays = allExistingDates
             .map { StreakCalculator.epochMillisToDayIndex(it) }
             .toHashSet()
 
@@ -211,6 +216,8 @@ class PhotoRepository @Inject constructor(
                 val mediaId = c.getLong(idCol)
                 val mediaUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId)
 
+                // For days already in the DB, migrate any photo row that still holds a
+                // stale content:// URI. Only migrate once per day (LIMIT 1 query).
                 if (day in existingDays) {
                     val cal = Calendar.getInstance().apply {
                         timeInMillis = dateTaken
@@ -219,12 +226,21 @@ class PhotoRepository @Inject constructor(
                     }
                     val midnight = cal.timeInMillis
                     val tomorrowMidnight = midnight + 24 * 60 * 60 * 1000L
-                    val existingId = dao.getPhotoIdForDay(midnight, tomorrowMidnight)
+                    // Only migrate a photo that still has a stale content:// URI.
+                    // Using getPhotoIdForDay (LIMIT 1, no ORDER BY) would make every
+                    // MediaStore entry for a multi-photo day overwrite the same DB record's
+                    // filePath with the last file processed, corrupting the display path.
+                    val existingId = dao.getContentUriPhotoIdForDay(midnight, tomorrowMidnight)
                     if (existingId != null) migrateToPrivateStorage(existingId, name, mediaUri)
-                    continue
                 }
 
-                // New day (fresh-reinstall recovery) — copy to private storage and insert.
+                // Skip if this exact photo is already in the DB (guards against re-inserting
+                // on a second sync and also skips photos just handled by the migration path).
+                if (dateTaken in existingTimestamps) continue
+
+                // Photo not in DB — recover it. This handles fresh reinstalls AND the case
+                // where multiple photos were taken on the same day (previously only the first
+                // was recovered because existingDays.add(day) blocked the rest).
                 val privateFile = copyMediaUriToPrivateStorage(name, mediaUri)
                 val color = colorForDay(dateTaken)
                 dao.insert(
@@ -239,9 +255,24 @@ class PhotoRepository @Inject constructor(
                         dominantColorHex = color.hex
                     )
                 )
+                existingTimestamps.add(dateTaken)
                 existingDays.add(day)
             }
         }
+    }
+
+    /** Rotates a photo 90° clockwise in place on disk. No-op for non-file paths. */
+    suspend fun rotatePhoto(photo: PhotoEntity) = withContext(Dispatchers.IO) {
+        if (!photo.filePath.startsWith("/")) return@withContext
+        try {
+            val file = File(photo.filePath)
+            val original = BitmapFactory.decodeFile(file.absolutePath) ?: return@withContext
+            val matrix = Matrix().apply { postRotate(90f) }
+            val rotated = Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
+            original.recycle()
+            FileOutputStream(file).use { rotated.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+            rotated.recycle()
+        } catch (_: Exception) { }
     }
 
     /** Deletes a photo from the app DB and storage (private file or MediaStore). */
@@ -277,7 +308,7 @@ class PhotoRepository @Inject constructor(
      * Publishes a copy of the photo to the system gallery (MediaStore) for visibility
      * in the Photos app. This is best-effort — the app's display doesn't depend on it.
      */
-    private fun publishToSystemGallery(bitmap: Bitmap, filename: String, now: Long) {
+    private fun publishToSystemGallery(bitmap: Bitmap, filename: String, now: Long, lat: Double?, lon: Double?) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val cv = ContentValues().apply {
@@ -290,14 +321,42 @@ class PhotoRepository @Inject constructor(
                 val resolver = context.contentResolver
                 val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return
                 resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                if (lat != null && lon != null) {
+                    resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                        val exif = ExifInterface(pfd.fileDescriptor)
+                        writeGpsExif(exif, lat, lon)
+                        exif.saveAttributes()
+                    }
+                }
                 cv.clear(); cv.put(MediaStore.Images.Media.IS_PENDING, 0)
                 resolver.update(uri, cv, null, null)
             } else {
                 val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "ColorWalk")
                 dir.mkdirs()
-                FileOutputStream(File(dir, filename)).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                val file = File(dir, filename)
+                FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                if (lat != null && lon != null) {
+                    val exif = ExifInterface(file.absolutePath)
+                    writeGpsExif(exif, lat, lon)
+                    exif.saveAttributes()
+                }
             }
         } catch (_: Exception) { /* best-effort — never block the capture flow */ }
+    }
+
+    private fun writeGpsExif(exif: ExifInterface, lat: Double, lon: Double) {
+        exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, if (lat >= 0) "N" else "S")
+        exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE, toDmsRational(Math.abs(lat)))
+        exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, if (lon >= 0) "E" else "W")
+        exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, toDmsRational(Math.abs(lon)))
+    }
+
+    private fun toDmsRational(decimal: Double): String {
+        val deg = decimal.toInt()
+        val minFull = (decimal - deg) * 60.0
+        val min = minFull.toInt()
+        val secNum = Math.round((minFull - min) * 60.0 * 1000).toInt()
+        return "$deg/1,$min/1,$secNum/1000"
     }
 
     /**
@@ -358,7 +417,26 @@ class PhotoRepository @Inject constructor(
     } catch (_: Exception) { Pair(null, null) }
 
     private fun decodeBitmapFromUri(uri: Uri): Bitmap? = try {
-        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        var bmp = context.contentResolver.openInputStream(uri)
+            ?.use { BitmapFactory.decodeStream(it) } ?: return null
+        val rotation = try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val exif = ExifInterface(stream)
+                when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED)) {
+                    ExifInterface.ORIENTATION_ROTATE_90  -> 90f
+                    ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                    ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                    else -> 0f
+                }
+            } ?: 0f
+        } catch (_: Exception) { 0f }
+        if (rotation != 0f) {
+            val matrix = Matrix().apply { postRotate(rotation) }
+            val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+            bmp.recycle()
+            bmp = rotated
+        }
+        bmp
     } catch (_: Exception) { null }
 
     private fun isToday(epochMillis: Long): Boolean {

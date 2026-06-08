@@ -6,7 +6,6 @@ import android.content.Intent
 import com.colorwalk.app.data.db.AppDatabase
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.colorForDay
-import com.colorwalk.app.ui.widget.ColorWalkWidget
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -17,12 +16,12 @@ class StreakReminderReceiver : BroadcastReceiver() {
 
     @OptIn(DelicateCoroutinesApi::class)
     override fun onReceive(context: Context, intent: Intent) {
+        val slot = intent.getStringExtra(AlarmScheduler.EXTRA_SLOT) ?: AlarmScheduler.SLOT_MORNING
         val pendingResult = goAsync()
         GlobalScope.launch(Dispatchers.IO) {
             try {
                 val dao = AppDatabase.getInstance(context).photoDao()
 
-                // Check if already captured today
                 val cal = Calendar.getInstance().apply {
                     set(Calendar.HOUR_OF_DAY, 0)
                     set(Calendar.MINUTE, 0)
@@ -40,12 +39,12 @@ class StreakReminderReceiver : BroadcastReceiver() {
                     NotificationHelper.showReminder(context, colorName, streak)
                 }
 
-                // Refresh widget for the new day
-                ColorWalkWidget.requestUpdate(context)
-
-                // Reschedule for tomorrow only if still enabled
+                // Reschedule this specific slot for tomorrow (respects per-slot enabled state)
                 if (NotificationPrefs.isEnabled(context)) {
-                    AlarmScheduler.scheduleDaily(context)
+                    if (slot == AlarmScheduler.SLOT_MORNING && NotificationPrefs.isMorningEnabled(context))
+                        AlarmScheduler.scheduleMorning(context)
+                    else if (slot == AlarmScheduler.SLOT_EVENING && NotificationPrefs.isEveningEnabled(context))
+                        AlarmScheduler.scheduleEvening(context)
                 }
             } finally {
                 pendingResult.finish()

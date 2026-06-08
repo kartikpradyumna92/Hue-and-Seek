@@ -92,51 +92,51 @@ class NotificationPrefsTest {
         assertFalse(NotificationPrefs.isEnabled(context))
     }
 
-    // ── getHour / set ────────────────────────────────────────────────────────
+    // ── getMorningHour / setMorning ───────────────────────────────────────────
 
     @Test
-    fun getHour_default_isTen() {
-        assertEquals(10, NotificationPrefs.getHour(context))
+    fun getMorningHour_default_isTen() {
+        assertEquals(10, NotificationPrefs.getMorningHour(context))
     }
 
     @Test
-    fun set_hour_thenGetHour_returnsStoredValue() {
-        NotificationPrefs.set(context, hour = 8, minute = 30)
-        assertEquals(8, NotificationPrefs.getHour(context))
+    fun setMorning_hour_thenGetMorningHour_returnsStoredValue() {
+        NotificationPrefs.setMorning(context, hour = 8, minute = 30)
+        assertEquals(8, NotificationPrefs.getMorningHour(context))
     }
 
     @Test
-    fun set_hour_extremeValue_roundTrips() {
-        NotificationPrefs.set(context, hour = 23, minute = 0)
-        assertEquals(23, NotificationPrefs.getHour(context))
+    fun setMorning_hour_extremeValue_roundTrips() {
+        NotificationPrefs.setMorning(context, hour = 23, minute = 0)
+        assertEquals(23, NotificationPrefs.getMorningHour(context))
     }
 
-    // ── getMinute / set ───────────────────────────────────────────────────────
+    // ── getMorningMinute / setMorning ─────────────────────────────────────────
 
     @Test
-    fun getMinute_default_isZero() {
-        assertEquals(0, NotificationPrefs.getMinute(context))
-    }
-
-    @Test
-    fun set_minute_thenGetMinute_returnsStoredValue() {
-        NotificationPrefs.set(context, hour = 9, minute = 45)
-        assertEquals(45, NotificationPrefs.getMinute(context))
+    fun getMorningMinute_default_isZero() {
+        assertEquals(0, NotificationPrefs.getMorningMinute(context))
     }
 
     @Test
-    fun set_hourAndMinute_bothRoundTrip() {
-        NotificationPrefs.set(context, hour = 14, minute = 15)
-        assertEquals(14, NotificationPrefs.getHour(context))
-        assertEquals(15, NotificationPrefs.getMinute(context))
+    fun setMorning_minute_thenGetMorningMinute_returnsStoredValue() {
+        NotificationPrefs.setMorning(context, hour = 9, minute = 45)
+        assertEquals(45, NotificationPrefs.getMorningMinute(context))
     }
 
     @Test
-    fun set_calledTwice_secondCallOverridesFirst() {
-        NotificationPrefs.set(context, hour = 7, minute = 0)
-        NotificationPrefs.set(context, hour = 18, minute = 30)
-        assertEquals(18, NotificationPrefs.getHour(context))
-        assertEquals(30, NotificationPrefs.getMinute(context))
+    fun setMorning_hourAndMinute_bothRoundTrip() {
+        NotificationPrefs.setMorning(context, hour = 14, minute = 15)
+        assertEquals(14, NotificationPrefs.getMorningHour(context))
+        assertEquals(15, NotificationPrefs.getMorningMinute(context))
+    }
+
+    @Test
+    fun setMorning_calledTwice_secondCallOverridesFirst() {
+        NotificationPrefs.setMorning(context, hour = 7, minute = 0)
+        NotificationPrefs.setMorning(context, hour = 18, minute = 30)
+        assertEquals(18, NotificationPrefs.getMorningHour(context))
+        assertEquals(30, NotificationPrefs.getMorningMinute(context))
     }
 
     // ── getThemeMode / setThemeMode ───────────────────────────────────────────

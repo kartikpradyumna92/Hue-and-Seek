@@ -9,18 +9,57 @@ import java.util.Calendar
 
 object AlarmScheduler {
 
-    private const val REQUEST_CODE = 2001
+    private const val REQUEST_MORNING = 2001
+    private const val REQUEST_EVENING = 2002
 
-    fun scheduleDaily(context: Context) {
-        val hour = NotificationPrefs.getHour(context)
-        val minute = NotificationPrefs.getMinute(context)
+    const val EXTRA_SLOT   = "SLOT"
+    const val SLOT_MORNING = "MORNING"
+    const val SLOT_EVENING = "EVENING"
 
+    /** Schedules whichever slots are individually enabled; cancels the others. */
+    fun scheduleBoth(context: Context) {
+        if (NotificationPrefs.isMorningEnabled(context)) scheduleMorning(context)
+        else cancelMorning(context)
+        if (NotificationPrefs.isEveningEnabled(context)) scheduleEvening(context)
+        else cancelEvening(context)
+    }
+
+    fun scheduleMorning(context: Context) {
+        schedule(
+            context,
+            hour        = NotificationPrefs.getMorningHour(context),
+            minute      = NotificationPrefs.getMorningMinute(context),
+            requestCode = REQUEST_MORNING,
+            slot        = SLOT_MORNING
+        )
+    }
+
+    fun scheduleEvening(context: Context) {
+        schedule(
+            context,
+            hour        = NotificationPrefs.getEveningHour(context),
+            minute      = NotificationPrefs.getEveningMinute(context),
+            requestCode = REQUEST_EVENING,
+            slot        = SLOT_EVENING
+        )
+    }
+
+    fun cancelMorning(context: Context) = cancelOne(context, REQUEST_MORNING, SLOT_MORNING)
+    fun cancelEvening(context: Context) = cancelOne(context, REQUEST_EVENING, SLOT_EVENING)
+
+    /** Cancels all alarms (used by master toggle off). */
+    fun cancel(context: Context) {
+        cancelMorning(context)
+        cancelEvening(context)
+    }
+
+    private fun schedule(context: Context, hour: Int, minute: Int, requestCode: Int, slot: String) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
 
         val intent = PendingIntent.getBroadcast(
             context,
-            REQUEST_CODE,
-            Intent(context, StreakReminderReceiver::class.java),
+            requestCode,
+            Intent(context, StreakReminderReceiver::class.java).putExtra(EXTRA_SLOT, slot),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -29,50 +68,26 @@ object AlarmScheduler {
             set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-            if (timeInMillis <= System.currentTimeMillis()) {
-                add(Calendar.DAY_OF_YEAR, 1)
-            }
+            if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
         }
 
-        // On API 31+, exact alarms require SCHEDULE_EXACT_ALARM / USE_EXACT_ALARM.
-        // On API 33+ with USE_EXACT_ALARM declared, canScheduleExactAlarms() returns true automatically.
-        // Pre-API 31: setExactAndAllowWhileIdle works without any permission.
-        // setWindow (inexact) gets deferred in Doze mode and can silently miss the window.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (alarmManager.canScheduleExactAlarms()) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    trigger.timeInMillis,
-                    intent
-                )
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger.timeInMillis, intent)
             } else {
-                alarmManager.setWindow(
-                    AlarmManager.RTC_WAKEUP,
-                    trigger.timeInMillis - 7 * 60 * 1000L,
-                    15 * 60 * 1000L,
-                    intent
-                )
+                alarmManager.setWindow(AlarmManager.RTC_WAKEUP, trigger.timeInMillis - 7 * 60 * 1000L, 15 * 60 * 1000L, intent)
             }
         } else {
-            alarmManager.setExactAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                trigger.timeInMillis,
-                intent
-            )
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger.timeInMillis, intent)
         }
     }
 
-    @Deprecated("Use scheduleDaily which reads user preference", ReplaceWith("scheduleDaily(context)"))
-    fun scheduleDailyNoon(context: Context) = scheduleDaily(context)
-
-    fun cancel(context: Context) {
+    private fun cancelOne(context: Context, requestCode: Int, slot: String) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
-        val intent = PendingIntent.getBroadcast(
-            context,
-            REQUEST_CODE,
-            Intent(context, StreakReminderReceiver::class.java),
+        PendingIntent.getBroadcast(
+            context, requestCode,
+            Intent(context, StreakReminderReceiver::class.java).putExtra(EXTRA_SLOT, slot),
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
-        )
-        intent?.let { alarmManager.cancel(it) }
+        )?.let { alarmManager.cancel(it) }
     }
 }

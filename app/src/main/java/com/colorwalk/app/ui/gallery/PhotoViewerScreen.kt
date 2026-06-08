@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.net.Uri
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.memory.MemoryCache
 import coil.request.ImageRequest
 import com.colorwalk.app.data.db.PhotoEntity
 import java.io.File as JavaFile
@@ -40,7 +43,8 @@ fun PhotoViewerScreen(
     photos: List<PhotoEntity>,
     initialIndex: Int,
     onClose: () -> Unit,
-    onDelete: (PhotoEntity) -> Unit
+    onDelete: (PhotoEntity) -> Unit,
+    onRotate: (PhotoEntity, onDone: () -> Unit) -> Unit
 ) {
     // Photos already arrive newest-first; page 0 = newest.
     // Swiping left → higher page index → older photo (standard photo-app convention).
@@ -49,6 +53,10 @@ fun PhotoViewerScreen(
     // Reset zoom whenever the visible page changes
     var scale by remember { mutableStateOf(1f) }
     LaunchedEffect(pagerState.currentPage) { scale = 1f }
+
+    // Per-photo revision counter — incremented after each rotation to bust Coil's cache
+    val rotationRevisions = remember { mutableStateMapOf<Long, Int>() }
+    var isRotating by remember { mutableStateOf(false) }
 
     val currentPhoto = photos.getOrNull(pagerState.currentPage) ?: return
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -81,6 +89,9 @@ fun PhotoViewerScreen(
             modifier = Modifier.fillMaxSize(),
             beyondBoundsPageCount = 1
         ) { page ->
+            val photo = photos[page]
+            val revision = rotationRevisions[photo.id] ?: 0
+            val cacheKey = "${photo.filePath}::$revision"
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -89,7 +100,9 @@ fun PhotoViewerScreen(
             ) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
-                        .data(photos[page].filePath.let { p -> if (p.startsWith("/")) JavaFile(p) else Uri.parse(p) })
+                        .data(photo.filePath.let { p -> if (p.startsWith("/")) JavaFile(p) else Uri.parse(p) })
+                        .memoryCacheKey(cacheKey)
+                        .diskCacheKey(cacheKey)
                         .crossfade(true)
                         .build(),
                     contentDescription = null,
@@ -102,17 +115,17 @@ fun PhotoViewerScreen(
         }
 
         // ── Top bar ──────────────────────────────────────────────────────────
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            contentAlignment = Alignment.Center
         ) {
             IconButton(
                 onClick = onClose,
                 modifier = Modifier
+                    .align(Alignment.CenterStart)
                     .size(40.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.55f))
@@ -133,14 +146,45 @@ fun PhotoViewerScreen(
                 )
             }
 
-            IconButton(
-                onClick = { showDeleteConfirm = true },
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.55f))
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFEF9A9A))
+                IconButton(
+                    onClick = {
+                        if (!isRotating) {
+                            isRotating = true
+                            onRotate(currentPhoto) {
+                                // Clear old cache entries so thumbnails in album views also update
+                                context.imageLoader.memoryCache?.remove(
+                                    MemoryCache.Key("${currentPhoto.filePath}::${rotationRevisions[currentPhoto.id] ?: 0}")
+                                )
+                                context.imageLoader.diskCache?.remove(
+                                    "${currentPhoto.filePath}::${rotationRevisions[currentPhoto.id] ?: 0}"
+                                )
+                                rotationRevisions[currentPhoto.id] = (rotationRevisions[currentPhoto.id] ?: 0) + 1
+                                isRotating = false
+                            }
+                        }
+                    },
+                    enabled = !isRotating,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                ) {
+                    Icon(Icons.Default.RotateRight, contentDescription = "Rotate", tint = Color.White)
+                }
+
+                IconButton(
+                    onClick = { showDeleteConfirm = true },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFEF9A9A))
+                }
             }
         }
 

@@ -2,12 +2,12 @@ package com.colorwalk.app.ui.gallery
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +49,7 @@ fun GalleryScreen(
     val viewMode by viewModel.viewMode.collectAsState()
     val selectedColor by viewModel.selectedColor.collectAsState()
     val viewerState by viewModel.viewerState.collectAsState()
+    var swipeDelta by remember { mutableFloatStateOf(0f) }
 
     // Full-screen viewer takes priority over everything
     if (viewerState != null) {
@@ -55,7 +57,8 @@ fun GalleryScreen(
             photos = viewerState!!.photos,
             initialIndex = viewerState!!.initialIndex,
             onClose = { viewModel.closePhoto() },
-            onDelete = { viewModel.deletePhoto(it) }
+            onDelete = { viewModel.deletePhoto(it) },
+            onRotate = { photo, onDone -> viewModel.rotatePhoto(photo, onDone) }
         )
         return
     }
@@ -74,6 +77,27 @@ fun GalleryScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
+            .pointerInput(viewMode) {
+                detectHorizontalDragGestures(
+                    onDragStart = { swipeDelta = 0f },
+                    onDragEnd = {
+                        val threshold = 80.dp.toPx()
+                        when {
+                            swipeDelta < -threshold && viewMode == GalleryViewMode.COLOR ->
+                                viewModel.setViewMode(GalleryViewMode.DATE)
+                            swipeDelta > threshold && viewMode == GalleryViewMode.DATE ->
+                                viewModel.setViewMode(GalleryViewMode.COLOR)
+                            swipeDelta > threshold && viewMode == GalleryViewMode.COLOR ->
+                                onBack()
+                        }
+                        swipeDelta = 0f
+                    },
+                    onDragCancel = { swipeDelta = 0f }
+                ) { change, dragAmount ->
+                    change.consume()
+                    swipeDelta += dragAmount
+                }
+            }
     ) {
         // Top bar
         Row(
@@ -163,7 +187,6 @@ private fun ColorFolderGrid(folders: List<ColorSummary>, onColorClick: (String) 
 
 @Composable
 private fun DatePhotoList(photos: List<PhotoEntity>, onDelete: (PhotoEntity) -> Unit, onOpen: (PhotoEntity) -> Unit = {}) {
-    // Group by "MMMM yyyy" descending
     val grouped = remember(photos) {
         val fmt = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
         photos
@@ -172,35 +195,39 @@ private fun DatePhotoList(photos: List<PhotoEntity>, onDelete: (PhotoEntity) -> 
             .sortedByDescending { it.value.first().dateTaken }
     }
 
-    LazyColumn(contentPadding = PaddingValues(16.dp)) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        contentPadding = PaddingValues(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         grouped.forEach { (monthYear, monthPhotos) ->
-            item {
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 Text(
                     monthYear,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                    modifier = Modifier.padding(bottom = 10.dp, top = 4.dp)
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                 )
             }
             items(monthPhotos, key = { it.id }) { photo ->
-                DatePhotoRow(
+                DatePhotoCard(
                     photo = photo,
-                    onDelete = { onDelete(photo) },
-                    onOpen = { onOpen(photo) }
+                    onOpen = { onOpen(photo) },
+                    onDelete = { onDelete(photo) }
                 )
-                Spacer(Modifier.height(8.dp))
             }
         }
     }
 }
 
 @Composable
-private fun DatePhotoRow(photo: PhotoEntity, onDelete: () -> Unit, onOpen: () -> Unit = {}) {
-    val dateStr = remember(photo.dateTaken) {
-        SimpleDateFormat("EEE, MMM d  •  h:mm a", Locale.getDefault()).format(Date(photo.dateTaken))
-    }
+private fun DatePhotoCard(photo: PhotoEntity, onOpen: () -> Unit, onDelete: () -> Unit) {
     val accentColor = parseHexColor(photo.colorHex)
+    val dateStr = remember(photo.dateTaken) {
+        SimpleDateFormat("MMM d  •  h:mm a", Locale.getDefault()).format(Date(photo.dateTaken))
+    }
     var showConfirm by remember { mutableStateOf(false) }
 
     if (showConfirm) {
@@ -226,51 +253,69 @@ private fun DatePhotoRow(photo: PhotoEntity, onDelete: () -> Unit, onOpen: () ->
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(modifier = Modifier.height(88.dp), verticalAlignment = Alignment.CenterVertically) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(if (photo.filePath.startsWith("/")) JavaFile(photo.filePath) else Uri.parse(photo.filePath))
-                    .crossfade(true)
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .width(88.dp)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
-                    .background(accentColor.copy(alpha = 0.15f))
-            )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
+        Column {
+            Box {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(if (photo.filePath.startsWith("/")) JavaFile(photo.filePath) else Uri.parse(photo.filePath))
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                        .background(accentColor.copy(alpha = 0.15f))
+                )
+                IconButton(
+                    onClick = { showConfirm = true },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.6f))
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = Color(0xFFEF9A9A),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            Column(modifier = Modifier.padding(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
+                            .size(8.dp)
                             .clip(CircleShape)
                             .background(accentColor)
                     )
-                    Spacer(Modifier.width(6.dp))
-                    Text(photo.colorName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = accentColor)
+                    Spacer(Modifier.width(4.dp))
+                    Text(photo.colorName, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = accentColor)
                 }
-                Text(dateStr, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                Spacer(Modifier.height(2.dp))
+                Text(dateStr, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                 if (photo.locationName != null) {
+                    Spacer(Modifier.height(3.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f), modifier = Modifier.size(11.dp))
+                        Icon(
+                            Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = accentColor,
+                            modifier = Modifier.size(11.dp)
+                        )
                         Spacer(Modifier.width(3.dp))
-                        Text(photo.locationName, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f), maxLines = 1)
+                        Text(
+                            photo.locationName,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            maxLines = 1
+                        )
                     }
                 }
-            }
-            // Delete button on right edge
-            IconButton(
-                onClick = { showConfirm = true },
-                modifier = Modifier.padding(end = 4.dp).size(36.dp)
-            ) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f), modifier = Modifier.size(18.dp))
             }
         }
     }

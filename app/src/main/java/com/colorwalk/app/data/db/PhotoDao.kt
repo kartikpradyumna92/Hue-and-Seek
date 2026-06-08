@@ -32,6 +32,9 @@ interface PhotoDao {
     @Query("SELECT id FROM photos WHERE dateTaken >= :midnightMs AND dateTaken < :tomorrowMidnightMs LIMIT 1")
     suspend fun getPhotoIdForDay(midnightMs: Long, tomorrowMidnightMs: Long): Long?
 
+    @Query("SELECT id FROM photos WHERE dateTaken >= :midnightMs AND dateTaken < :tomorrowMidnightMs AND filePath LIKE 'content://%' LIMIT 1")
+    suspend fun getContentUriPhotoIdForDay(midnightMs: Long, tomorrowMidnightMs: Long): Long?
+
     @Query("UPDATE photos SET filePath = :newPath WHERE id = :id")
     suspend fun updateFilePath(id: Long, newPath: String)
 
