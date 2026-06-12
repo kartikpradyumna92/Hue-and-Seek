@@ -21,11 +21,15 @@ import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.WalkColor
 import com.colorwalk.app.domain.colorForDay
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -144,8 +148,15 @@ class PhotoRepository @Inject constructor(
     /** Captures a photo. Only saves if color validation passes. */
     suspend fun savePhoto(bitmap: Bitmap, targetColor: WalkColor): SaveResult =
         withContext(Dispatchers.IO) {
+            // Kick off the GPS request immediately so the fix warms up while color
+            // validation runs — usually zero added latency for the user.
+            val locationDeferred = async { getFreshLocation() }
+
             val validation = ColorValidator.validate(bitmap, targetColor)
-            if (!validation.passed) return@withContext SaveResult.ValidationFailed(validation)
+            if (!validation.passed) {
+                locationDeferred.cancel()
+                return@withContext SaveResult.ValidationFailed(validation)
+            }
 
             val now = System.currentTimeMillis()
             // Include millis so two captures in the same second never share a filename.
@@ -153,9 +164,12 @@ class PhotoRepository @Inject constructor(
 
             // Primary: save to app-private files dir — always readable without permissions.
             val privateFile = saveToPrivateStorage(bitmap, filename)
-                ?: return@withContext SaveResult.StorageError
+            if (privateFile == null) {
+                locationDeferred.cancel()
+                return@withContext SaveResult.StorageError
+            }
 
-            val (lat, lon) = getLastLocation()
+            val (lat, lon) = locationDeferred.await()
             val locationName = reverseGeocode(lat, lon)
 
             // Secondary: publish to system gallery with GPS EXIF so Google Photos shows location.
@@ -659,8 +673,23 @@ class PhotoRepository @Inject constructor(
                 p.get(Calendar.DAY_OF_YEAR) == t.get(Calendar.DAY_OF_YEAR)
     }
 
-    private suspend fun getLastLocation(): Pair<Double?, Double?> = try {
-        val loc = LocationServices.getFusedLocationProviderClient(context).lastLocation.await()
+    /**
+     * Actively requests a fresh GPS fix (bounded at 5s), falling back to the
+     * passive last-known cache. The old implementation read ONLY the cache, which
+     * is empty whenever no app recently obtained a fix — so photos silently saved
+     * without coordinates even with location permission granted.
+     */
+    private suspend fun getFreshLocation(): Pair<Double?, Double?> = try {
+        val client = LocationServices.getFusedLocationProviderClient(context)
+        val cts = CancellationTokenSource()
+        val fresh = try {
+            withTimeoutOrNull(5_000L) {
+                client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, cts.token).await()
+            }
+        } finally {
+            cts.cancel()   // stop the hardware request if we timed out or were cancelled
+        }
+        val loc = fresh ?: client.lastLocation.await()
         Pair(loc?.latitude, loc?.longitude)
     } catch (_: Exception) { Pair(null, null) }
 

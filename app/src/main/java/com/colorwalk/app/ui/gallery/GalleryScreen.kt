@@ -1,61 +1,71 @@
 package com.colorwalk.app.ui.gallery
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import kotlin.math.abs
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
-import android.net.Uri
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.colorwalk.app.data.db.ColorSummary
-import java.io.File as JavaFile
+import com.colorwalk.app.ui.components.EmptyState
+import com.colorwalk.app.ui.components.PhotoGridCard
+import com.colorwalk.app.ui.components.parseAccentHex
+import com.colorwalk.app.ui.components.photoImageRequest
+import com.colorwalk.app.ui.theme.Spacing
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.viewmodel.AlbumSortOrder
+import com.colorwalk.app.viewmodel.ColorFolderInfo
 import com.colorwalk.app.viewmodel.DateFilter
 import com.colorwalk.app.viewmodel.GalleryViewMode
 import com.colorwalk.app.viewmodel.GalleryViewModel
 import com.colorwalk.app.viewmodel.PlaceSummary
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+internal fun parseHexColor(hex: String): Color = parseAccentHex(hex)
+
+private val TAB_LABELS = listOf("By Color", "By Date", "By Place")
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun GalleryScreen(
     onBack: () -> Unit,
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
-    val folders            by viewModel.colorFolders.collectAsState()
+    val colorFolderCards   by viewModel.colorFolderCards.collectAsState()
     val allPhotos          by viewModel.allPhotos.collectAsState()
     val photosByPlace      by viewModel.photosByPlace.collectAsState()
     val viewMode           by viewModel.viewMode.collectAsState()
@@ -68,7 +78,6 @@ fun GalleryScreen(
     val hasUntaggedPhotos  by viewModel.hasUntaggedPhotos.collectAsState()
     val untaggedPhotos     by viewModel.untaggedPhotos.collectAsState()
     val showingUntagged    by viewModel.showingUntagged.collectAsState()
-    var swipeDelta         by remember { mutableFloatStateOf(0f) }
 
     // Full-screen viewer takes priority over everything
     if (viewerState != null) {
@@ -113,159 +122,247 @@ fun GalleryScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
-            .pointerInput(viewMode) {
-                detectHorizontalDragGestures(
-                    onDragStart = { swipeDelta = 0f },
-                    onDragEnd = {
-                        val threshold = 80.dp.toPx()
-                        when {
-                            swipeDelta < -threshold && viewMode == GalleryViewMode.COLOR ->
-                                viewModel.setViewMode(GalleryViewMode.DATE)
-                            swipeDelta < -threshold && viewMode == GalleryViewMode.DATE ->
-                                viewModel.setViewMode(GalleryViewMode.PLACE)
-                            swipeDelta > threshold && viewMode == GalleryViewMode.DATE ->
-                                viewModel.setViewMode(GalleryViewMode.COLOR)
-                            swipeDelta > threshold && viewMode == GalleryViewMode.PLACE ->
-                                viewModel.setViewMode(GalleryViewMode.DATE)
-                            swipeDelta > threshold && viewMode == GalleryViewMode.COLOR ->
-                                onBack()
-                        }
-                        swipeDelta = 0f
-                    },
-                    onDragCancel = { swipeDelta = 0f }
-                ) { change, dragAmount ->
-                    change.consume()
-                    swipeDelta += dragAmount
-                }
-            }
     ) {
         // Top bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
+                .padding(horizontal = Spacing.s, vertical = Spacing.s),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
             }
             Text(
                 "Gallery",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.padding(start = 4.dp)
+                modifier = Modifier.padding(start = Spacing.xs)
             )
         }
 
-        // View mode tabs — scrollable so all 3 fit on small screens
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            GalleryTabChip(
-                label = "By Color",
-                selected = viewMode == GalleryViewMode.COLOR,
-                onClick = { viewModel.setViewMode(GalleryViewMode.COLOR) }
-            )
-            GalleryTabChip(
-                label = "By Date",
-                selected = viewMode == GalleryViewMode.DATE,
-                onClick = { viewModel.setViewMode(GalleryViewMode.DATE) }
-            )
-            GalleryTabChip(
-                label = "By Place",
-                selected = viewMode == GalleryViewMode.PLACE,
-                onClick = { viewModel.setViewMode(GalleryViewMode.PLACE) }
-            )
+        // Tabs + pager — standard pattern: tab tap and horizontal swipe stay in sync,
+        // and swiping between tabs can no longer accidentally exit the screen.
+        val pagerState = rememberPagerState(initialPage = viewMode.ordinal) { GalleryViewMode.entries.size }
+
+        LaunchedEffect(pagerState.settledPage) {
+            val mode = GalleryViewMode.entries[pagerState.settledPage]
+            if (mode != viewMode) viewModel.setViewMode(mode)
+        }
+        LaunchedEffect(viewMode) {
+            if (pagerState.currentPage != viewMode.ordinal && !pagerState.isScrollInProgress) {
+                pagerState.animateScrollToPage(viewMode.ordinal)
+            }
         }
 
-        // Filter / sort row per mode
-        when (viewMode) {
-            GalleryViewMode.COLOR -> ColorSearchBar(
-                query = searchQuery,
-                onQueryChange = { viewModel.setSearchQuery(it) },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-            GalleryViewMode.DATE -> {
-                // Scrollable date filter chips
-                Row(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    DateFilter.entries.forEach { filter ->
-                        FilterChip(
-                            selected = dateFilter == filter,
-                            onClick = { viewModel.setDateFilter(filter) },
-                            label = { Text(filter.label, fontSize = 13.sp) }
-                        )
-                    }
-                }
-                // Sort order row
-                Row(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .padding(bottom = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Sort:",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+        // Indicator follows pagerState.currentPage (flips mid-swipe), not viewMode
+        // (which only updates on settle) — otherwise the indicator lags the gesture.
+        val scope = rememberCoroutineScope()
+        TabRow(
+            selectedTabIndex = pagerState.currentPage,
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
+            indicator = { tabPositions ->
+                if (pagerState.currentPage < tabPositions.size) {
+                    TabRowDefaults.SecondaryIndicator(
+                        Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    AlbumSortOrder.entries.forEach { order ->
-                        FilterChip(
-                            selected = dateSortOrder == order,
-                            onClick = { viewModel.setDateSortOrder(order) },
-                            label = { Text(order.label, fontSize = 12.sp) }
+                }
+            }
+        ) {
+            GalleryViewMode.entries.forEachIndexed { index, _ ->
+                Tab(
+                    selected = pagerState.currentPage == index,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
+                    text = {
+                        Text(
+                            TAB_LABELS[index],
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1
                         )
+                    }
+                )
+            }
+        }
+
+        // Swipe right past the first tab exits to Home (restores the pre-pager
+        // gesture). Nested-scroll hooks are unreliable here — the pager and its
+        // edge overscroll consume the leftover deltas internally — so this watches
+        // raw pointer events on the Initial pass (delivered before the pager's own
+        // gesture handling) and consumes nothing: tab paging is untouched.
+        // A gesture only counts as an exit-pull if it STARTED with the pager settled
+        // on the first tab, so finishing a Date→Color swipe can never overshoot home.
+        val swipeHomeModifier = Modifier.pointerInput(pagerState) {
+            val thresholdPx = 80.dp.toPx()
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                val eligible = pagerState.currentPage == 0 &&
+                    abs(pagerState.currentPageOffsetFraction) < 0.01f
+                var totalX = 0f
+                var totalY = 0f
+                var fired = false
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    totalX += change.position.x - change.previousPosition.x
+                    totalY += change.position.y - change.previousPosition.y
+                    val stillAtEdge = pagerState.currentPage == 0 &&
+                        abs(pagerState.currentPageOffsetFraction) < 0.01f
+                    // Mostly-horizontal rightward pull while the pager has nowhere
+                    // to go → exit to Home. Fire once per gesture.
+                    if (!fired && eligible && stillAtEdge &&
+                        totalX > thresholdPx && totalX > 2 * abs(totalY)
+                    ) {
+                        fired = true
+                        onBack()
                     }
                 }
             }
-            GalleryViewMode.PLACE -> { /* no filter row for place */ }
         }
 
-        val isEmpty = when (viewMode) {
-            GalleryViewMode.COLOR -> folders.isEmpty()
-            GalleryViewMode.DATE  -> allPhotos.isEmpty()
-            GalleryViewMode.PLACE -> photosByPlace.isEmpty() && !hasUntaggedPhotos
-        }
-
-        if (isEmpty) {
-            val (message, sub) = when {
-                viewMode == GalleryViewMode.COLOR && searchQuery.isNotBlank() ->
-                    Pair("No colors matching\n\"$searchQuery\"", "Try a different search term")
-                viewMode == GalleryViewMode.DATE && dateFilter != DateFilter.ALL ->
-                    Pair("No photos in this period", "Try a different time range")
-                viewMode == GalleryViewMode.PLACE && allPhotos.isNotEmpty() ->
-                    Pair("No location data", "Photos need location available at capture time to appear here")
-                else ->
-                    Pair("No photos yet", "Start your first color walk!")
-            }
-            EmptyGallery(message, sub)
-        } else {
-            when (viewMode) {
-                GalleryViewMode.COLOR -> ColorFolderGrid(folders, onColorClick = { viewModel.selectColor(it) })
-                GalleryViewMode.DATE  -> DatePhotoList(
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .weight(1f)
+                .then(swipeHomeModifier),
+            verticalAlignment = Alignment.Top
+        ) { page ->
+            when (GalleryViewMode.entries[page]) {
+                GalleryViewMode.COLOR -> ColorTab(
+                    folders = colorFolderCards,
+                    searchQuery = searchQuery,
+                    onQueryChange = { viewModel.setSearchQuery(it) },
+                    onColorClick = { viewModel.selectColor(it) }
+                )
+                GalleryViewMode.DATE -> DateTab(
                     photos = allPhotos,
+                    dateFilter = dateFilter,
                     sortOrder = dateSortOrder,
+                    onFilterChange = { viewModel.setDateFilter(it) },
+                    onSortChange = { viewModel.setDateSortOrder(it) },
                     onDelete = { viewModel.deletePhoto(it) },
                     onOpen = { viewModel.openPhoto(it, allPhotos) }
                 )
-                GalleryViewMode.PLACE -> PlaceFolderGrid(
+                GalleryViewMode.PLACE -> PlaceTab(
                     places = photosByPlace,
-                    onPlaceClick = { viewModel.selectPlace(it) },
                     hasUntagged = hasUntaggedPhotos,
                     untaggedCount = untaggedPhotos.size,
                     untaggedThumbnail = untaggedPhotos.firstOrNull()?.filePath,
+                    anyPhotosExist = allPhotos.isNotEmpty(),
+                    onPlaceClick = { viewModel.selectPlace(it) },
                     onUntaggedClick = { viewModel.openUntagged() }
                 )
+            }
+        }
+    }
+}
+
+// ── By Color tab ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun ColorTab(
+    folders: List<ColorFolderInfo>,
+    searchQuery: String,
+    onQueryChange: (String) -> Unit,
+    onColorClick: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ColorSearchBar(
+            query = searchQuery,
+            onQueryChange = onQueryChange,
+            modifier = Modifier.padding(horizontal = Spacing.l, vertical = Spacing.s)
+        )
+        if (folders.isEmpty()) {
+            if (searchQuery.isNotBlank()) {
+                EmptyState(
+                    title = "No colors matching \"$searchQuery\"",
+                    subtitle = "Try a different search term"
+                )
+            } else {
+                EmptyState(title = "No photos yet", subtitle = "Start your first color walk!")
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(Spacing.l),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.m),
+                verticalArrangement = Arrangement.spacedBy(Spacing.m)
+            ) {
+                items(folders, key = { it.colorName }) { folder ->
+                    ColorFolderCard(folder = folder, onClick = { onColorClick(folder.colorName) })
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A color folder is the user's actual latest photo behind a tint of its color —
+ * photos are the visual currency, not abstract swatches.
+ */
+@Composable
+private fun ColorFolderCard(folder: ColorFolderInfo, onClick: () -> Unit) {
+    val color = parseAccentHex(folder.colorHex)
+    val context = LocalContext.current
+    Card(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.15f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AsyncImage(
+                model = photoImageRequest(context, folder.thumbnailPath),
+                contentDescription = "${folder.colorName} album, ${folder.photoCount} photos",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            // Color identity tint + readable bottom scrim
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(color.copy(alpha = 0.18f))
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f))
+                        )
+                    )
+                    .padding(horizontal = Spacing.m, vertical = Spacing.m)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .clip(CircleShape)
+                            .background(color)
+                    )
+                    Spacer(Modifier.width(Spacing.s))
+                    Text(
+                        folder.colorName,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Color.White,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1
+                    )
+                    Text(
+                        "${folder.photoCount}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White.copy(alpha = 0.85f)
+                    )
+                }
             }
         }
     }
@@ -281,7 +378,7 @@ private fun ColorSearchBar(
         value = query,
         onValueChange = onQueryChange,
         modifier = modifier.fillMaxWidth(),
-        placeholder = { Text("Search colors…", fontSize = 13.sp) },
+        placeholder = { Text("Search colors…", style = MaterialTheme.typography.bodyMedium) },
         leadingIcon = {
             Icon(Icons.Default.Search, contentDescription = null,
                 modifier = Modifier.size(18.dp))
@@ -299,229 +396,72 @@ private fun ColorSearchBar(
     )
 }
 
-@Composable
-private fun GalleryTabChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val bg = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
-    val textColor = if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(bg)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp)
-    ) {
-        Text(label, color = textColor, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-    }
-}
+// ── By Date tab ───────────────────────────────────────────────────────────────
 
 @Composable
-private fun ColorFolderGrid(folders: List<ColorSummary>, onColorClick: (String) -> Unit) {
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        items(folders) { folder ->
-            ColorFolderCard(folder = folder, onClick = { onColorClick(folder.colorName) })
-        }
-    }
-}
-
-@Composable
-private fun PlaceFolderGrid(
-    places: List<PlaceSummary>,
-    onPlaceClick: (String) -> Unit,
-    hasUntagged: Boolean = false,
-    untaggedCount: Int = 0,
-    untaggedThumbnail: String? = null,
-    onUntaggedClick: () -> Unit = {}
+private fun DateTab(
+    photos: List<PhotoEntity>,
+    dateFilter: DateFilter,
+    sortOrder: AlbumSortOrder,
+    onFilterChange: (DateFilter) -> Unit,
+    onSortChange: (AlbumSortOrder) -> Unit,
+    onDelete: (PhotoEntity) -> Unit,
+    onOpen: (PhotoEntity) -> Unit
 ) {
-    val context = LocalContext.current
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        items(places, key = { it.locationName }) { place ->
-            PlaceFolderCard(place = place, context = context, onClick = { onPlaceClick(place.locationName) })
-        }
-        if (hasUntagged) {
-            item(key = "untagged_card") {
-                UntaggedFolderCard(
-                    count = untaggedCount,
-                    thumbnailPath = untaggedThumbnail,
-                    context = context,
-                    onClick = onUntaggedClick
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = Spacing.l, vertical = Spacing.xs)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.s)
+        ) {
+            DateFilter.entries.forEach { filter ->
+                FilterChip(
+                    selected = dateFilter == filter,
+                    onClick = { onFilterChange(filter) },
+                    label = { Text(filter.label, style = MaterialTheme.typography.labelMedium) }
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun UntaggedFolderCard(
-    count: Int,
-    thumbnailPath: String?,
-    context: android.content.Context,
-    onClick: () -> Unit
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .clickable(onClick = onClick)
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            if (thumbnailPath != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(if (thumbnailPath.startsWith("/")) JavaFile(thumbnailPath) else Uri.parse(thumbnailPath))
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(16.dp))
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f),
-                            RoundedCornerShape(16.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.LocationOff,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f),
-                        modifier = Modifier.size(48.dp)
-                    )
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))
-                        ),
-                        shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.LocationOff,
-                            contentDescription = null,
-                            tint = Color(0xFFFFC107),
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(Modifier.width(3.dp))
-                        Text(
-                            "Needs Location",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "$count photo${if (count != 1) "s" else ""}  •  Tap to tag",
-                        fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.8f)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PlaceFolderCard(place: PlaceSummary, context: android.content.Context, onClick: () -> Unit) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .clickable(onClick = onClick)
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(
-                        if (place.thumbnailPath.startsWith("/")) JavaFile(place.thumbnailPath)
-                        else Uri.parse(place.thumbnailPath)
-                    )
-                    .crossfade(true)
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(16.dp))
+        Row(
+            modifier = Modifier
+                .padding(horizontal = Spacing.l)
+                .padding(bottom = Spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Sort:",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            // Gradient overlay at bottom
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))
-                        ),
-                        shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.LocationOn,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(Modifier.width(3.dp))
-                        Text(
-                            place.locationName,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "${place.photoCount} photo${if (place.photoCount != 1) "s" else ""}",
-                        fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.8f)
-                    )
-                }
+            AlbumSortOrder.entries.forEach { order ->
+                FilterChip(
+                    selected = sortOrder == order,
+                    onClick = { onSortChange(order) },
+                    label = { Text(order.label, style = MaterialTheme.typography.labelMedium) }
+                )
             }
+        }
+
+        if (photos.isEmpty()) {
+            if (dateFilter != DateFilter.ALL) {
+                EmptyState(title = "No photos in this period", subtitle = "Try a different time range")
+            } else {
+                EmptyState(title = "No photos yet", subtitle = "Start your first color walk!")
+            }
+        } else {
+            DatePhotoGrid(photos = photos, sortOrder = sortOrder, onDelete = onDelete, onOpen = onOpen)
         }
     }
 }
 
 @Composable
-private fun DatePhotoList(
+private fun DatePhotoGrid(
     photos: List<PhotoEntity>,
     sortOrder: AlbumSortOrder,
     onDelete: (PhotoEntity) -> Unit,
-    onOpen: (PhotoEntity) -> Unit = {}
+    onOpen: (PhotoEntity) -> Unit
 ) {
     val grouped = remember(photos, sortOrder) {
         val fmt = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
@@ -536,25 +476,91 @@ private fun DatePhotoList(
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
-        contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        contentPadding = PaddingValues(Spacing.l),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+        verticalArrangement = Arrangement.spacedBy(Spacing.s)
     ) {
         grouped.forEach { (monthYear, monthPhotos) ->
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Text(
                     monthYear,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                    modifier = Modifier.padding(top = Spacing.s, bottom = Spacing.xs)
                 )
             }
             items(monthPhotos, key = { it.id }) { photo ->
-                DatePhotoCard(
+                PhotoGridCard(
                     photo = photo,
+                    accentColor = parseAccentHex(photo.colorHex),
                     onOpen = { onOpen(photo) },
-                    onDelete = { onDelete(photo) }
+                    onDelete = { onDelete(photo) },
+                    showColorName = true,
+                    showTime = true,
+                    showDominant = false
+                )
+            }
+        }
+    }
+}
+
+// ── By Place tab ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun PlaceTab(
+    places: List<PlaceSummary>,
+    hasUntagged: Boolean,
+    untaggedCount: Int,
+    untaggedThumbnail: String?,
+    anyPhotosExist: Boolean,
+    onPlaceClick: (String) -> Unit,
+    onUntaggedClick: () -> Unit
+) {
+    if (places.isEmpty() && !hasUntagged) {
+        if (anyPhotosExist) {
+            EmptyState(
+                title = "No location data",
+                subtitle = "Photos need location available at capture time to appear here"
+            )
+        } else {
+            EmptyState(title = "No photos yet", subtitle = "Start your first color walk!")
+        }
+    } else {
+        PlaceFolderGrid(
+            places = places,
+            onPlaceClick = onPlaceClick,
+            hasUntagged = hasUntagged,
+            untaggedCount = untaggedCount,
+            untaggedThumbnail = untaggedThumbnail,
+            onUntaggedClick = onUntaggedClick
+        )
+    }
+}
+
+@Composable
+private fun PlaceFolderGrid(
+    places: List<PlaceSummary>,
+    onPlaceClick: (String) -> Unit,
+    hasUntagged: Boolean = false,
+    untaggedCount: Int = 0,
+    untaggedThumbnail: String? = null,
+    onUntaggedClick: () -> Unit = {}
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        contentPadding = PaddingValues(Spacing.l),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.m),
+        verticalArrangement = Arrangement.spacedBy(Spacing.m)
+    ) {
+        items(places, key = { it.locationName }) { place ->
+            PlaceFolderCard(place = place, onClick = { onPlaceClick(place.locationName) })
+        }
+        if (hasUntagged) {
+            item(key = "untagged_card") {
+                UntaggedFolderCard(
+                    count = untaggedCount,
+                    thumbnailPath = untaggedThumbnail,
+                    onClick = onUntaggedClick
                 )
             }
         }
@@ -562,175 +568,138 @@ private fun DatePhotoList(
 }
 
 @Composable
-private fun DatePhotoCard(photo: PhotoEntity, onOpen: () -> Unit, onDelete: () -> Unit) {
-    val accentColor = parseHexColor(photo.colorHex)
-    val dateStr = remember(photo.dateTaken) {
-        SimpleDateFormat("MMM d  •  h:mm a", Locale.getDefault()).format(Date(photo.dateTaken))
-    }
-    var showConfirm by remember { mutableStateOf(false) }
-
-    if (showConfirm) {
-        AlertDialog(
-            onDismissRequest = { showConfirm = false },
-            title = { Text("Delete photo?") },
-            text = { Text("This will remove it from the app and your device gallery.") },
-            confirmButton = {
-                TextButton(onClick = { showConfirm = false; onDelete() }) {
-                    Text("Delete", color = Color(0xFFEF5350))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConfirm = false }) { Text("Cancel") }
-            }
-        )
-    }
-
+private fun UntaggedFolderCard(
+    count: Int,
+    thumbnailPath: String?,
+    onClick: () -> Unit
+) {
     val context = LocalContext.current
     Card(
-        onClick = onOpen,
-        shape = RoundedCornerShape(12.dp),
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
     ) {
-        Column {
-            Box {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (thumbnailPath != null) {
                 AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(if (photo.filePath.startsWith("/")) JavaFile(photo.filePath) else Uri.parse(photo.filePath))
-                        .crossfade(true)
-                        .build(),
+                    model = photoImageRequest(context, thumbnailPath),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-                        .background(accentColor.copy(alpha = 0.15f))
+                    modifier = Modifier.fillMaxSize()
                 )
-                IconButton(
-                    onClick = { showConfirm = true },
+            } else {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.6f))
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = Color(0xFFEF9A9A),
-                        modifier = Modifier.size(16.dp)
+                        Icons.Default.LocationOff,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(48.dp)
                     )
                 }
             }
-            Column(modifier = Modifier.padding(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(accentColor)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f))
+                        )
                     )
-                    Spacer(Modifier.width(4.dp))
-                    Text(photo.colorName, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = accentColor)
+                    .padding(horizontal = Spacing.m, vertical = Spacing.m)
+            ) {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.LocationOff,
+                            contentDescription = null,
+                            tint = Color(0xFFFFC107),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            "Needs Location",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "$count photo${if (count != 1) "s" else ""}  •  Tap to tag",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
                 }
-                Spacer(Modifier.height(2.dp))
-                Text(dateStr, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                if (photo.locationName != null) {
-                    Spacer(Modifier.height(3.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaceFolderCard(place: PlaceSummary, onClick: () -> Unit) {
+    val context = LocalContext.current
+    Card(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AsyncImage(
+                model = photoImageRequest(context, place.thumbnailPath),
+                contentDescription = "${place.locationName}, ${place.photoCount} photos",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            // Gradient overlay at bottom
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f))
+                        )
+                    )
+                    .padding(horizontal = Spacing.m, vertical = Spacing.m)
+            ) {
+                Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Default.LocationOn,
                             contentDescription = null,
-                            tint = accentColor,
-                            modifier = Modifier.size(11.dp)
+                            tint = Color.White,
+                            modifier = Modifier.size(13.dp)
                         )
                         Spacer(Modifier.width(3.dp))
                         Text(
-                            photo.locationName,
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            maxLines = 1
+                            place.locationName,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "${place.photoCount} photo${if (place.photoCount != 1) "s" else ""}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun EmptyGallery(
-    message: String = "No photos yet",
-    sub: String = "Start your first color walk!"
-) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(horizontal = 32.dp)
-        ) {
-            Icon(
-                Icons.Default.PhotoLibrary,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
-                modifier = Modifier.size(72.dp)
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                message,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                fontSize = 18.sp,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                sub,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center
-            )
-        }
-    }
-}
-
-@Composable
-private fun ColorFolderCard(folder: ColorSummary, onClick: () -> Unit) {
-    val color = parseHexColor(folder.colorHex)
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.15f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .clickable(onClick = onClick)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(CircleShape)
-                    .background(color)
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(folder.colorName, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-            Text(
-                folder.colorHex.uppercase(),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
-                letterSpacing = 1.sp
-            )
-        }
-    }
-}
-
-internal fun parseHexColor(hex: String): Color {
-    return try {
-        Color(android.graphics.Color.parseColor(if (hex.startsWith("#")) hex else "#$hex"))
-    } catch (e: Exception) {
-        Color.Gray
     }
 }

@@ -22,7 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -150,7 +150,7 @@ fun CameraScreen(
                 onClick = onBack,
                 modifier = Modifier.clip(CircleShape).background(Color.Black.copy(alpha = 0.5f))
             ) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             Spacer(Modifier.width(12.dp))
             Box(
@@ -289,11 +289,19 @@ fun CameraScreen(
                             )
                         },
                         modifier = Modifier
-                            .size(72.dp)
+                            .size(76.dp)
                             .clip(CircleShape)
                             .background(Color.White)
-                            .border(4.dp, targetColor.composeColor, CircleShape)
-                    ) {}
+                            .border(5.dp, targetColor.composeColor, CircleShape)
+                    ) {
+                        // Center dot in the target color — the shutter IS the mission
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(targetColor.composeColor.copy(alpha = 0.85f))
+                        )
+                    }
                 } else {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(56.dp))
                 }
@@ -314,12 +322,15 @@ fun CameraScreen(
             }
         }
 
-        // Result overlay
+        // Result overlay — bottom-anchored card in the thumb zone
         AnimatedVisibility(
             visible = captureState !is CaptureState.Idle && captureState !is CaptureState.Processing,
-            enter = fadeIn() + slideInVertically(),
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.Center)
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 120.dp)
         ) {
             ResultCard(
                 state = captureState,
@@ -383,7 +394,7 @@ private fun CameraPermissionDenied(
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
         ) {
-            Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
         }
 
         Column(
@@ -464,75 +475,148 @@ private fun ResultCard(
     onDismiss: () -> Unit,
     onBack: () -> Unit
 ) {
-    val (icon, title, subtitle, accent) = when (state) {
-        is CaptureState.Success -> Quad(
-            Icons.Default.CheckCircle,
-            "Color Match!",
-            "Dominant: ${state.dominantHex}",
-            Color(0xFF4CAF50)
-        )
-        is CaptureState.Failed -> {
-            val pct = (state.matchPercent * 100).toInt()
-            if (state.actualDominant == targetColorName) Quad(
-                Icons.Default.ErrorOutline,
-                "More $targetColorName Needed",
-                "$targetColorName leads, but fills only $pct% of the frame. Get closer so it really pops!",
-                Color(0xFFFF5722)
-            ) else Quad(
-                Icons.Default.ErrorOutline,
-                "$targetColorName Isn't Dominant",
-                "${state.actualDominant} dominated ($pct% was $targetColorName). Make $targetColorName the main subject.",
-                Color(0xFFFF5722)
-            )
-        }
-        is CaptureState.ImportWrongDay -> Quad(
-            Icons.Default.ErrorOutline,
-            "Wrong Day",
-            "Photo taken on ${SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(state.dateTaken))} — must be today.",
-            Color(0xFFFF9800)
-        )
-        CaptureState.ImportNoDate -> Quad(
-            Icons.Default.ErrorOutline,
-            "No Date Info",
-            "This photo has no date metadata — can't verify it was taken today.",
-            Color(0xFFFF9800)
-        )
-        CaptureState.ImportDuplicate -> Quad(
-            Icons.Default.ErrorOutline,
-            "Already Imported",
-            "This photo is already in your gallery.",
-            Color(0xFFFF9800)
-        )
-        else -> Quad(Icons.Default.ErrorOutline, "Error", "Something went wrong.", Color(0xFFFF5722))
-    }
+    val targetSwatch = com.colorwalk.app.domain.WALK_COLORS
+        .firstOrNull { it.name == targetColorName }?.composeColor ?: Color.Gray
 
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
-        modifier = Modifier.padding(32.dp)
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1B22)),
+        modifier = Modifier.padding(horizontal = 24.dp)
     ) {
         Column(
-            modifier = Modifier.padding(28.dp),
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 22.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(56.dp))
-            Spacer(Modifier.height(12.dp))
-            Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            Spacer(Modifier.height(8.dp))
-            Text(subtitle, fontSize = 14.sp, color = Color.White.copy(alpha = 0.7f))
-            Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (state is CaptureState.Success) {
-                    Button(onClick = onBack, colors = ButtonDefaults.buttonColors(containerColor = accent)) {
-                        Text("Done")
+            when (state) {
+                is CaptureState.Success -> {
+                    Icon(
+                        Icons.Default.CheckCircle, contentDescription = null,
+                        tint = Color(0xFF4CAF50), modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text("Color Match!", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ResultSwatch(color = targetSwatch, label = targetColorName, sub = "Target")
+                        Spacer(Modifier.width(28.dp))
+                        ResultSwatch(
+                            color = parseResultHex(state.dominantHex),
+                            label = state.dominantHex.uppercase(),
+                            sub = "You found"
+                        )
+                    }
+                    Spacer(Modifier.height(18.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = onBack,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                        ) { Text("Done", style = MaterialTheme.typography.labelLarge) }
+                        OutlinedButton(onClick = onDismiss) {
+                            Text("Take Another", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        }
                     }
                 }
-                OutlinedButton(onClick = onDismiss) {
-                    Text(if (state is CaptureState.Success) "Take Another" else "Try Again")
+
+                is CaptureState.Failed -> {
+                    val pct = (state.matchPercent * 100).toInt()
+                    val needPct = (com.colorwalk.app.domain.ColorValidator.MIN_TARGET_SHARE * 100).toInt()
+                    val targetLeads = state.actualDominant == targetColorName
+                    val actualSwatch = com.colorwalk.app.domain.WALK_COLORS
+                        .firstOrNull { it.name == state.actualDominant }?.composeColor
+                        ?: Color(0xFF9E9E9E) // neutral tones
+
+                    Text(
+                        if (targetLeads) "More $targetColorName Needed" else "$targetColorName Isn't Dominant",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = Color.White,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    // Target vs actual — show the user exactly what the camera saw
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ResultSwatch(color = targetSwatch, label = targetColorName, sub = "Target")
+                        Spacer(Modifier.width(28.dp))
+                        ResultSwatch(color = actualSwatch, label = state.actualDominant, sub = "Dominated")
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    LinearProgressIndicator(
+                        progress = { state.matchPercent.coerceIn(0f, 1f) },
+                        color = targetSwatch,
+                        trackColor = Color.White.copy(alpha = 0.12f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "$pct% of the frame was $targetColorName — needs $needPct%+. " +
+                            if (targetLeads) "Get closer so it pops!" else "Make it the main subject.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedButton(onClick = onDismiss) {
+                        Text("Try Again", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+
+                else -> {
+                    val (title, subtitle) = when (state) {
+                        is CaptureState.ImportWrongDay -> Pair(
+                            "Wrong Day",
+                            "Photo taken on ${SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(state.dateTaken))} — must be today."
+                        )
+                        CaptureState.ImportNoDate -> Pair(
+                            "No Date Info",
+                            "This photo has no date metadata — can't verify it was taken today."
+                        )
+                        CaptureState.ImportDuplicate -> Pair(
+                            "Already Imported",
+                            "This photo is already in your gallery."
+                        )
+                        else -> Pair("Error", "Something went wrong.")
+                    }
+                    Icon(
+                        Icons.Default.ErrorOutline, contentDescription = null,
+                        tint = Color(0xFFFF9800), modifier = Modifier.size(44.dp)
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(title, style = MaterialTheme.typography.headlineSmall, color = Color.White)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedButton(onClick = onDismiss) {
+                        Text("Try Again", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    }
                 }
             }
         }
     }
 }
 
-private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
+@Composable
+private fun ResultSwatch(color: Color, label: String, sub: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(color)
+                .border(2.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = Color.White)
+        Text(sub, style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.5f))
+    }
+}
+
+private fun parseResultHex(hex: String): Color = try {
+    Color(android.graphics.Color.parseColor(hex))
+} catch (_: Exception) { Color.Gray }

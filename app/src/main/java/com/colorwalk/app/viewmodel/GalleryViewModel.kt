@@ -33,6 +33,14 @@ data class PlaceSummary(
     val colorHex: String
 )
 
+/** Color folder enriched with count + most-recent thumbnail for the gallery grid. */
+data class ColorFolderInfo(
+    val colorName: String,
+    val colorHex: String,
+    val photoCount: Int,
+    val thumbnailPath: String
+)
+
 data class PhotoViewerState(
     val photos: List<PhotoEntity>,
     val initialIndex: Int
@@ -63,6 +71,20 @@ class GalleryViewModel @Inject constructor(
         combine(rawColorFolders, _searchQuery) { folders, query ->
             if (query.isBlank()) folders
             else folders.filter { it.colorName.contains(query, ignoreCase = true) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Presentation-derived folder cards (count + newest photo as thumbnail),
+    // sorted by photo count so the user's strongest colors lead the grid.
+    val colorFolderCards: StateFlow<List<ColorFolderInfo>> =
+        combine(rawAllPhotos, _searchQuery) { photos, query ->
+            photos
+                .groupBy { it.colorName }
+                .map { (name, group) ->
+                    val newest = group.maxByOrNull { it.dateTaken }!!
+                    ColorFolderInfo(name, newest.colorHex, group.size, newest.filePath)
+                }
+                .filter { query.isBlank() || it.colorName.contains(query, ignoreCase = true) }
+                .sortedByDescending { it.photoCount }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allPhotos: StateFlow<List<PhotoEntity>> =

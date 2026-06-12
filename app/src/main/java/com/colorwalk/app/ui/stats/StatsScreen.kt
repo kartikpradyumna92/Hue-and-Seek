@@ -14,7 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,6 +42,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.ui.components.photoImageRequest
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.viewmodel.StatsUiState
 import com.colorwalk.app.viewmodel.StatsViewModel
@@ -76,15 +78,14 @@ fun StatsScreen(
             ) {
                 IconButton(onClick = onBack) {
                     Icon(
-                        Icons.Default.ArrowBack,
+                        Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
                 Text(
                     "Streaks & Stats",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.padding(start = 4.dp)
                 )
@@ -95,10 +96,8 @@ fun StatsScreen(
             Spacer(Modifier.height(8.dp))
             Text(
                 "YOUR WALK HISTORY",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                letterSpacing = 1.5.sp,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
             MonthCalendar(
@@ -169,6 +168,11 @@ private fun StatsSection(state: StatsUiState) {
                 unit = null,
                 label = "Active days"
             )
+        }
+        MilestoneProgressCard(currentStreak = state.currentStreak)
+        if (state.totalPhotos > 0) {
+            Spacer(Modifier.height(12.dp))
+            ShareStreakButton(state = state)
         }
         if (state.favouriteColorName != null) {
             Spacer(Modifier.height(12.dp))
@@ -257,6 +261,96 @@ private fun StatCard(
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
             )
         }
+    }
+}
+
+/** Visual progress toward the next streak milestone — mirrors the Home ring. */
+@Composable
+private fun MilestoneProgressCard(currentStreak: Int) {
+    val next = com.colorwalk.app.viewmodel.HomeViewModel.MILESTONE_STREAKS
+        .filter { it > currentStreak }.minOrNull() ?: return
+    val prev = com.colorwalk.app.viewmodel.HomeViewModel.MILESTONE_STREAKS
+        .filter { it <= currentStreak }.maxOrNull() ?: 0
+    val progress = ((currentStreak - prev).toFloat() / (next - prev)).coerceIn(0f, 1f)
+
+    Spacer(Modifier.height(12.dp))
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "NEXT MILESTONE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "$next days",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            LinearProgressIndicator(
+                progress = { progress },
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "${next - currentStreak} day${if (next - currentStreak != 1) "s" else ""} to go — keep walking!",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** Shares the most recent photo + streak brag via the system share sheet. */
+@Composable
+private fun ShareStreakButton(state: StatsUiState) {
+    val context = LocalContext.current
+    FilledTonalButton(
+        onClick = {
+            try {
+                val latest = state.photosByDayIndex.values.firstOrNull()?.firstOrNull()
+                val text = buildString {
+                    append("🔥 ${state.currentStreak}-day color walk streak on Hue & Seek!")
+                    append(" ${state.totalPhotos} photos and counting.")
+                }
+                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    putExtra(android.content.Intent.EXTRA_TEXT, text)
+                    if (latest != null && latest.filePath.startsWith("/")) {
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.fileprovider",
+                            JavaFile(latest.filePath)
+                        )
+                        type = "image/jpeg"
+                        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } else {
+                        type = "text/plain"
+                    }
+                }
+                context.startActivity(android.content.Intent.createChooser(intent, "Share your streak"))
+            } catch (_: Exception) { /* no share targets / file gone — never crash */ }
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Share my streak", style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -397,24 +491,42 @@ private fun CalendarDayCell(
 
         val firstPhoto = photos?.firstOrNull()
         if (firstPhoto != null) {
+            // The actual photo, ringed in its walk color — the calendar becomes a
+            // mosaic of the user's own shots instead of abstract dots.
             val color = parseStatsHexColor(firstPhoto.colorHex)
+            val context = LocalContext.current
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(CircleShape)
-                    .background(color)
-                    .then(
-                        if (isToday) Modifier.border(2.dp, Color.White, CircleShape) else Modifier
+                    .background(color.copy(alpha = 0.3f))
+                    .border(
+                        2.dp,
+                        if (isToday) MaterialTheme.colorScheme.onBackground else color,
+                        CircleShape
                     )
                     .clickable { onDayClick(photos!!) },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    Icons.Default.LocalFireDepartment,
-                    contentDescription = "${firstPhoto.colorName} captured",
-                    tint = Color.White,
-                    modifier = Modifier.size(17.dp)
+                AsyncImage(
+                    model = photoImageRequest(context, firstPhoto.filePath),
+                    contentDescription = "${firstPhoto.colorName} captured" +
+                        if (photos.size > 1) ", ${photos.size} photos" else "",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
+                if (photos.size > 1) {
+                    Text(
+                        "${photos.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    )
+                }
             }
         } else {
             Box(

@@ -1,18 +1,23 @@
 package com.colorwalk.app.ui.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import com.colorwalk.app.domain.WALK_COLORS
 import com.colorwalk.app.notification.AlarmScheduler
 import com.colorwalk.app.notification.NotificationPrefs
 import com.colorwalk.app.ui.theme.ThemeMode
@@ -104,15 +109,14 @@ fun SettingsScreen(
             ) {
                 IconButton(onClick = onBack) {
                     Icon(
-                        Icons.Default.ArrowBack,
+                        Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
                 Text(
                     "Settings",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.headlineMedium,
                     modifier = Modifier.padding(start = 4.dp)
                 )
             }
@@ -123,24 +127,48 @@ fun SettingsScreen(
                 SettingsSectionHeader("About")
 
                 Card(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.large,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Hue & Seek", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(4.dp))
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Text(
+                            "Hue & Seek",
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                brush = Brush.horizontalGradient(
+                                    WALK_COLORS.map { it.composeColor }
+                                )
+                            )
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        // The eight walk colors — the app's identity in one row
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            WALK_COLORS.forEach { walkColor ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(walkColor.composeColor)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
                         Text(
                             "A daily color walk — find today's color in the world around you.",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            lineHeight = 18.sp
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Version $versionName",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                        )
+                        Spacer(Modifier.height(12.dp))
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Text(
+                                "v$versionName",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                 }
 
@@ -283,10 +311,8 @@ private fun ReminderSlotRow(
 private fun SettingsSectionHeader(title: String) {
     Text(
         title.uppercase(),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 1.5.sp,
-        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 4.dp, bottom = 8.dp, top = 4.dp)
     )
 }

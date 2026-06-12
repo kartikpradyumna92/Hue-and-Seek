@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.14.0] - 2026-06-12
+
+Major UI overhaul ("Bold & playful" direction) plus a fix for captures saving without GPS. No backend, database, or validation logic changed except the location fix.
+
+### Added
+- **Design system** — full Material 3 color schemes for dark and light themes (violet primary, teal secondary), a shared typography scale, shape scale (8–28 dp), and spacing tokens. All screens now draw from the same tokens instead of ad-hoc values.
+- **Shared UI components** — unified photo grid tile, screen header (back + title + subtitle), empty states, confirm-delete dialog, and a common Coil image-request builder used across every screen.
+- **Home: daily completion ring** — the hero ring now fills completely the moment today's photo is captured (and animates doing it), replacing the milestone-progress ring that could sit half-empty for weeks. Milestone countdown ("N days to 🔥 X") moved to a caption. The week history strip is tappable and opens Stats.
+- **Gallery: By Color folder cards** — each color folder now shows its latest photo as the cover, tinted to the color, with a photo-count badge, sorted by photo count.
+- **Gallery: swipe right on By Color goes Home** — a horizontal-swipe gesture on the first tab navigates back to Home (raw pointer observation, so the pager keeps working normally between tabs).
+- **Stats: photo calendar** — calendar day cells now render the day's photo thumbnail ringed in that day's color, with a count badge for multi-photo days; added a milestone progress card and a "Share streak" button (shares the latest photo + streak via the system share sheet).
+- **Camera: clearer result card** — bottom-anchored result with a target-vs-actual color swatch comparison and a progress bar showing how close the photo came to the 15% dominance threshold; shutter button shows the day's color in its center.
+- **Settings: themed About card** — rainbow-gradient title across all eight walk colors, color-dot row, and a version pill (reads the real version at runtime).
+
+### Fixed
+- **Captures saved without GPS even with location permission granted** — the app only read the system's passive location cache (`lastLocation`), which is empty unless some other app recently requested a fix, and silently saved the photo with no coordinates. Captures now actively request a fix (`getCurrentLocation`, balanced power) concurrently with color validation, bounded at 5 seconds, falling back to the cache; a capture is never blocked or delayed by GPS. Pre-existing untagged photos have no recoverable coordinates — manual tagging remains the path for those.
+- **Gallery tab indicator lagged behind swipes** — the indicator was driven by the view-mode state that only updates after a page settles; it now follows the pager's live scroll position.
+- **Color album header** — the hex code now appears once under the color name in the header instead of being stamped on every photo tile.
+
+### Changed
+- **versionCode** bumped from 9 → 10; **versionName** from 1.13.0 → 1.14.0.
+
+---
+
 ## [1.13.0] - 2026-06-11
 
 Bug-fix release from a full-codebase review: all 5 critical bugs plus 7 high-priority bugs fixed, color validation rewritten.

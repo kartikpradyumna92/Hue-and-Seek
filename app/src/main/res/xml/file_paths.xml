@@ -3,4 +3,6 @@
     <external-path name="external_files" path="." />
     <external-files-path name="app_external" path="." />
     <cache-path name="cache" path="." />
+    <!-- Private photo storage — shared via ACTION_SEND from the Stats screen -->
+    <files-path name="photos" path="photos/" />
 </paths>

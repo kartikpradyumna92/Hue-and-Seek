@@ -10,7 +10,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
@@ -26,10 +26,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.ui.components.EmptyState
+import com.colorwalk.app.ui.components.PhotoGridCard
+import com.colorwalk.app.ui.components.ScreenHeader
+import com.colorwalk.app.ui.components.photoImageRequest
+import com.colorwalk.app.ui.theme.Spacing
 import com.colorwalk.app.viewmodel.GalleryViewModel
-import java.io.File as JavaFile
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -55,72 +58,35 @@ fun UntaggedAlbumScreen(
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
-            }
-            Icon(
-                Icons.Default.LocationOff,
-                contentDescription = null,
-                tint = Color(0xFFFFC107),
-                modifier = Modifier.size(22.dp)
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                "Tag Older Photos",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f)
-            )
+        ScreenHeader(title = "Tag Older Photos", onBack = onBack) {
             Text(
                 "${photos.size} left",
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                fontSize = 14.sp
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = Spacing.s)
             )
         }
 
         Text(
             "Tap a photo to set its location",
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 10.dp)
+                .padding(horizontal = Spacing.l + Spacing.xs)
+                .padding(bottom = Spacing.m)
         )
 
         if (photos.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.PhotoLibrary,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
-                        modifier = Modifier.size(64.dp)
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "All photos tagged!",
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
+            EmptyState(title = "All photos tagged!")
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                contentPadding = PaddingValues(Spacing.l),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+                verticalArrangement = Arrangement.spacedBy(Spacing.s)
             ) {
                 items(photos, key = { it.id }) { photo ->
-                    PhotoCard(
+                    PhotoGridCard(
                         photo = photo,
                         accentColor = parseHexColor(photo.colorHex),
                         onOpen = { viewModel.startTagging(photo) },
@@ -164,13 +130,7 @@ private fun TagLocationDialog(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(
-                                if (photo.filePath.startsWith("/")) JavaFile(photo.filePath)
-                                else Uri.parse(photo.filePath)
-                            )
-                            .crossfade(true)
-                            .build(),
+                        model = photoImageRequest(context, photo.filePath),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier

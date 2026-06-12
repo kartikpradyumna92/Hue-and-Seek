@@ -3,13 +3,16 @@ package com.colorwalk.app.ui.home
 import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -25,7 +28,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -206,53 +213,41 @@ fun HomeScreen(
                 )
             }
 
-            Spacer(Modifier.height(28.dp))
-
-            Text(
-                "Today's Color",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            // Big color circle
-            Box(
-                modifier = Modifier
-                    .size(160.dp)
-                    .clip(CircleShape)
-                    .background(animatedColor),
-                contentAlignment = Alignment.Center
-            ) {
-                if (state.capturedToday) {
-                    Icon(
-                        Icons.Default.LocalFireDepartment,
-                        contentDescription = "Captured",
-                        tint = Color.White,  // always white — sits on the accent color circle
-                        modifier = Modifier.size(48.dp)
-                    )
-                }
-            }
-
             Spacer(Modifier.height(20.dp))
 
             Text(
+                "TODAY'S COLOR",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // Color hero: the daily circle wrapped in a completion ring that closes
+            // fully when today's photo is captured — a daily win, never a half-empty bar.
+            ColorHeroWithRing(
+                color = animatedColor,
+                streak = state.streak,
+                capturedToday = state.capturedToday
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            Text(
                 color?.name ?: "Loading…",
-                fontSize = 36.sp,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.displayMedium,
                 color = MaterialTheme.colorScheme.onBackground
             )
 
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(4.dp))
 
             Text(
                 color?.hex ?: "",
-                fontSize = 15.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
-                letterSpacing = 2.sp
+                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 2.sp),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
             )
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(20.dp))
 
             // Streak card — tappable to open Streaks & Stats
             Card(
@@ -298,12 +293,16 @@ fun HomeScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // Past 14-day color history strip
-            ColorHistoryStrip(capturedDayIndices = state.capturedDayIndices, now = now)
+            // Past 14-day color history strip — tappable, opens Streaks & Stats
+            ColorHistoryStrip(
+                capturedDayIndices = state.capturedDayIndices,
+                now = now,
+                onClick = onOpenStats
+            )
 
             Spacer(Modifier.weight(1f))
 
-            // Action buttons
+            // Action buttons — the capture CTA is framed as today's mission
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -316,7 +315,11 @@ fun HomeScreen(
                 ) {
                     Icon(Icons.Default.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Camera", fontWeight = FontWeight.Bold)
+                    Text(
+                        if (state.capturedToday) "Capture More" else "Find ${color?.name ?: "Color"}",
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1
+                    )
                 }
 
                 OutlinedButton(
@@ -327,11 +330,20 @@ fun HomeScreen(
                 ) {
                     Icon(Icons.Default.CollectionsBookmark, contentDescription = null, tint = animatedColor)
                     Spacer(Modifier.width(8.dp))
-                    Text("Gallery", color = animatedColor, fontWeight = FontWeight.Bold)
+                    Text("Gallery", color = animatedColor, style = MaterialTheme.typography.labelLarge)
                 }
             }
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(10.dp))
+
+            // Gesture affordance — the swipe shortcuts were previously undiscoverable
+            Text(
+                "Swipe right for camera  •  left for gallery",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
+            )
+
+            Spacer(Modifier.height(20.dp))
         }
 
         // Confetti celebration overlay
@@ -361,13 +373,90 @@ fun HomeScreen(
     }
 }
 
+/**
+ * The daily color circle wrapped in a DAILY COMPLETION ring: empty track until
+ * today's photo is captured, then it sweeps fully closed — a small, satisfying
+ * win every single day. (A milestone-progress ring was tried first and felt
+ * demotivating: it sat half-empty for weeks. Milestone countdown stays as the
+ * caption text below instead.)
+ */
 @Composable
-private fun ColorHistoryStrip(capturedDayIndices: Set<Int>, now: Long) {
+private fun ColorHeroWithRing(
+    color: Color,
+    streak: Int,
+    capturedToday: Boolean
+) {
+    val nextMilestone = remember(streak) {
+        com.colorwalk.app.viewmodel.HomeViewModel.MILESTONE_STREAKS.filter { it > streak }.minOrNull()
+    }
+    val animatedProgress by animateFloatAsState(
+        targetValue = if (capturedToday) 1f else 0f,
+        animationSpec = tween(900),
+        label = "ringProgress"
+    )
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(192.dp)) {
+            val trackColor = color.copy(alpha = 0.18f)
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val stroke = 9.dp.toPx()
+                val inset = stroke / 2
+                val arcSize = Size(size.width - stroke, size.height - stroke)
+                drawArc(
+                    color = trackColor,
+                    startAngle = -90f, sweepAngle = 360f, useCenter = false,
+                    topLeft = Offset(inset, inset), size = arcSize,
+                    style = Stroke(stroke, cap = StrokeCap.Round)
+                )
+                if (animatedProgress > 0f) {
+                    drawArc(
+                        color = color,
+                        startAngle = -90f, sweepAngle = 360f * animatedProgress, useCenter = false,
+                        topLeft = Offset(inset, inset), size = arcSize,
+                        style = Stroke(stroke, cap = StrokeCap.Round)
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .size(156.dp)
+                    .clip(CircleShape)
+                    .background(color),
+                contentAlignment = Alignment.Center
+            ) {
+                if (capturedToday) {
+                    Icon(
+                        Icons.Default.LocalFireDepartment,
+                        contentDescription = "Captured today",
+                        tint = Color.White,  // always white — sits on the accent color circle
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+            }
+        }
+        if (nextMilestone != null && streak > 0) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "${nextMilestone - streak} day${if (nextMilestone - streak != 1) "s" else ""} to ${milestoneEmoji(nextMilestone)} $nextMilestone",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ColorHistoryStrip(
+    capturedDayIndices: Set<Int>,
+    now: Long,
+    onClick: () -> Unit
+) {
     // Keyed to `now` so the strip updates when the live clock crosses midnight
     val todayIndex = remember(now) { StreakCalculator.epochMillisToDayIndex(now) }
 
     // Pre-compute all 14 day timestamps once per day (not per item per recomposition)
     val dayData = remember(todayIndex) {
+        val weekdayFmt = SimpleDateFormat("EEEEE", Locale.getDefault())
         (0..13).map { offset ->
             val dayOffset = offset - 13
             val millis = Calendar.getInstance().apply {
@@ -377,17 +466,21 @@ private fun ColorHistoryStrip(capturedDayIndices: Set<Int>, now: Long) {
                 set(Calendar.MILLISECOND, 0)
                 add(Calendar.DAY_OF_YEAR, dayOffset)
             }.timeInMillis
-            Pair(todayIndex + dayOffset, colorForDay(millis).composeColor)
+            Triple(todayIndex + dayOffset, colorForDay(millis).composeColor, weekdayFmt.format(Date(millis)))
         }
     }
 
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         contentPadding = PaddingValues(horizontal = 2.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClickLabel = "Open streaks and stats", onClick = onClick)
+            .padding(vertical = 4.dp)
     ) {
         items(14) { offset ->
-            val (dayIndex, dayColor) = dayData[offset]
+            val (dayIndex, dayColor, weekday) = dayData[offset]
             val captured = dayIndex in capturedDayIndices
             val isToday = dayIndex == todayIndex
 
@@ -404,6 +497,15 @@ private fun ColorHistoryStrip(capturedDayIndices: Set<Int>, now: Long) {
                             if (isToday) Modifier.border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
                             else Modifier
                         )
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    weekday,
+                    fontSize = 9.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(
+                        alpha = if (isToday) 0.8f else 0.4f
+                    ),
+                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
                 )
             }
         }
