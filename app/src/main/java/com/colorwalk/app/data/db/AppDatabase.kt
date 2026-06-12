@@ -22,6 +22,11 @@ abstract class AppDatabase : RoomDatabase() {
                     "colorwalk.db"
                 )
                 // Add Migration(oldVer, newVer) { ... } objects here on every schema change.
+                // TRUNCATE keeps everything in the single .db file: Auto Backup snapshots
+                // the files independently, so a .db/.db-wal pair from different moments
+                // restores an inconsistent database (B10). Write volume here is a few
+                // rows per day — WAL buys nothing.
+                .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
                 .build().also { INSTANCE = it }
             }
     }

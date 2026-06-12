@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.15.0] - 2026-06-12
+
+Reliability release: reminder alarms, backup/restore, and capture responsiveness.
+
+### Fixed
+- **Play-policy risk on exact alarms** — the manifest declared `USE_EXACT_ALARM` (restricted by Google Play to alarm-clock/calendar apps, a review-rejection risk) with an invalid `minSdkVersion` attribute. Now declares the user-revocable `SCHEDULE_EXACT_ALARM` instead; the existing inexact-window fallback covers revocation. Side effect: on Android 12 (API 31–32), where neither permission was previously declared, reminders can now fire exactly on time.
+- **Reminders died after an app update or clock/timezone change** — the boot receiver only handled device restarts. It now also re-arms the alarms on `MY_PACKAGE_REPLACED` (updates cancel all alarms), `TIME_SET`, and `TIMEZONE_CHANGED` (RTC alarms keep stale wall-clock times after those).
+- **Backup could restore a broken database** — two problems: phone-to-phone transfers restored the database but not the private photo files it points at, and backing up the SQLite WAL sidecar files alongside the `.db` could restore an inconsistent snapshot. Device-to-device transfer now includes the photos directory (no size quota applies there), and the database runs in TRUNCATE journal mode so there is only ever one consistent file to back up. Cloud backup intentionally stays database+prefs only — photos would blow the 25 MB quota and fail the entire backup; cloud restores recover photos from the system gallery as before.
+- **"Color Match!" card waited on the network** — after a capture or import, the success card was blocked while the place name was reverse-geocoded (seconds on a slow connection). The photo is now saved and the card shown immediately; the place name resolves in the background and the By Place gallery updates when it lands. Geocoding also uses the non-deprecated async API on Android 13+.
+
+### Changed
+- **versionCode** bumped from 10 → 11; **versionName** from 1.14.0 → 1.15.0.
+
+---
+
 ## [1.14.0] - 2026-06-12
 
 Major UI overhaul ("Bold & playful" direction) plus a fix for captures saving without GPS. No backend, database, or validation logic changed except the location fix.

@@ -15,8 +15,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- Auto-granted on Android 13+ (API 33+) for reminder/habit apps — no user prompt needed -->
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" android:minSdkVersion="33" />
+    <!-- User-revocable exact-alarm permission (API 31+; ignored below). Play policy
+         reserves USE_EXACT_ALARM for alarm-clock/calendar apps — a habit reminder must
+         use SCHEDULE_EXACT_ALARM. AlarmScheduler already falls back to an inexact
+         window when the user revokes it (B8). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <uses-feature android:name="android.hardware.camera" android:required="true" />
 
@@ -48,8 +51,15 @@
         <receiver
             android:name=".notification.BootReceiver"
             android:exported="true">
+            <!-- All four actions are on the implicit-broadcast exemption list, so a
+                 manifest receiver still works on API 26+. Without the extra three,
+                 reminders stayed dead after an app update or clock/timezone change
+                 until the app was next opened (B9). -->
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
 

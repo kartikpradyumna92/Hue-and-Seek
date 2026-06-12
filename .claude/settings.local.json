@@ -114,7 +114,8 @@
       "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle assembleDebug testDebugUnitTest compileDebugAndroidTestKotlin --console=plain)",
       "Bash(awk -F'\"' '{t+=$2; f+=$6; e+=$8} END {print \"TOTAL:\", t, \"tests,\", f, \"failures,\", e, \"errors\"}')",
       "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle assembleDebug testDebugUnitTest --console=plain)",
-      "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle assembleDebug testDebugUnitTest -q)"
+      "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle assembleDebug testDebugUnitTest -q)",
+      "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle assembleDebug testDebugUnitTest)"
     ],
     "additionalDirectories": [
       "/tmp",

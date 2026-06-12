@@ -4,10 +4,23 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 
+/**
+ * Re-arms the one-shot reminder alarms whenever the system drops or invalidates
+ * them: device reboot, app update (alarms are cancelled on package replace), and
+ * clock/timezone changes (RTC alarms keep their old wall-clock millis and would
+ * fire at the wrong local time).
+ */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED && NotificationPrefs.isEnabled(context)) {
-            AlarmScheduler.scheduleBoth(context)
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            Intent.ACTION_TIME_CHANGED,        // manifest action android.intent.action.TIME_SET
+            Intent.ACTION_TIMEZONE_CHANGED -> {
+                if (NotificationPrefs.isEnabled(context)) {
+                    AlarmScheduler.scheduleBoth(context)
+                }
+            }
         }
     }
 }

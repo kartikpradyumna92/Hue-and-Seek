@@ -1,18 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Backup rules for API 31+. Cloud backup has a 25 MB quota — exceeding it fails
+     the WHOLE backup (DB + tombstones included), so photos stay out of the cloud
+     set and post-restore recovery is the MediaStore sync (Pass 2). Device-to-device
+     transfer has no quota: the photos dir rides along so a new phone gets every
+     photo even if the system-gallery copies were never made. The DB runs in
+     TRUNCATE journal mode, so no -wal/-shm sidecars exist to restore out of sync. -->
 <data-extraction-rules>
     <cloud-backup>
         <include domain="database" path="colorwalk.db" />
-        <include domain="database" path="colorwalk.db-shm" />
-        <include domain="database" path="colorwalk.db-wal" />
-        <include domain="file" path="datastore" />
         <include domain="sharedpref" path="app_prefs.xml" />
         <exclude domain="cache" path="." />
     </cloud-backup>
     <device-transfer>
         <include domain="database" path="colorwalk.db" />
-        <include domain="database" path="colorwalk.db-shm" />
-        <include domain="database" path="colorwalk.db-wal" />
-        <include domain="file" path="datastore" />
+        <include domain="file" path="photos/" />
         <include domain="sharedpref" path="app_prefs.xml" />
     </device-transfer>
 </data-extraction-rules>

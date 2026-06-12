@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.location.Address
 import android.location.Geocoder
 import android.media.ExifInterface
 import android.media.MediaScannerConnection
@@ -24,12 +25,17 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -43,6 +49,10 @@ class PhotoRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val dao: PhotoDao
 ) {
+    // Outlives any single caller: post-save geocode updates must complete even if
+    // the capture screen (and its viewModelScope) is gone before the network does.
+    private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     fun getAllPhotos(): Flow<List<PhotoEntity>> = dao.getAllPhotos()
     fun getPhotosByColor(colorName: String): Flow<List<PhotoEntity>> = dao.getPhotosByColor(colorName)
     fun getDistinctColors(): Flow<List<ColorSummary>> = dao.getDistinctColors()
@@ -170,11 +180,10 @@ class PhotoRepository @Inject constructor(
             }
 
             val (lat, lon) = locationDeferred.await()
-            val locationName = reverseGeocode(lat, lon)
 
             // Secondary: publish to system gallery with GPS EXIF so Google Photos shows location.
             publishToSystemGallery(bitmap, filename, now, lat, lon)
-            dao.insert(
+            val id = dao.insert(
                 PhotoEntity(
                     filePath = privateFile.absolutePath,   // absolute path — passed as File to Coil
                     colorName = targetColor.name,
@@ -182,12 +191,14 @@ class PhotoRepository @Inject constructor(
                     dateTaken = now,
                     latitude = lat,
                     longitude = lon,
-                    locationName = locationName,
+                    locationName = null,   // resolved asynchronously below (B11)
                     dominantColorHex = validation.dominantHex
                 )
             )
             // A re-captured photo is a deliberate re-add — drop any matching tombstone.
             DeletionTombstones.clear(context, filename, now)
+            // Reverse geocoding hits the network — the success card must not wait on it.
+            resolveLocationNameAsync(id, lat, lon)
             SaveResult.Success(Uri.fromFile(privateFile), validation)
         }
 
@@ -213,8 +224,7 @@ class PhotoRepository @Inject constructor(
                 ?: return@withContext ImportResult.StorageError
 
             val (lat, lon) = readPhotoLocation(uri)
-            val locationName = reverseGeocode(lat, lon)
-            dao.insert(
+            val id = dao.insert(
                 PhotoEntity(
                     filePath = privateFile.absolutePath,
                     colorName = targetColor.name,
@@ -222,13 +232,14 @@ class PhotoRepository @Inject constructor(
                     dateTaken = dateTaken,
                     latitude = lat,
                     longitude = lon,
-                    locationName = locationName,
+                    locationName = null,   // resolved asynchronously below (B11)
                     dominantColorHex = validation.dominantHex
                 )
             )
             // Re-importing a previously deleted photo is a deliberate re-add — drop
             // any matching tombstone so future syncs can recover it again.
             DeletionTombstones.clear(context, filename, dateTaken)
+            resolveLocationNameAsync(id, lat, lon)
             ImportResult.Success(Uri.fromFile(privateFile), validation)
         }
 
@@ -693,13 +704,38 @@ class PhotoRepository @Inject constructor(
         Pair(loc?.latitude, loc?.longitude)
     } catch (_: Exception) { Pair(null, null) }
 
-    private fun reverseGeocode(lat: Double?, lon: Double?): String? {
+    /**
+     * Fills in locationName after the photo row already exists and the result has
+     * been returned to the UI — geocoding is a network call that used to block the
+     * "Color Match!" card for seconds (B11). Room Flows re-emit on the update, so
+     * the By Place gallery picks the name up whenever it lands.
+     */
+    private fun resolveLocationNameAsync(id: Long, lat: Double?, lon: Double?) {
+        if (lat == null || lon == null) return
+        repoScope.launch {
+            val name = reverseGeocode(lat, lon) ?: return@launch
+            dao.updateLocation(id, lat, lon, name)
+        }
+    }
+
+    private suspend fun reverseGeocode(lat: Double?, lon: Double?): String? {
         if (lat == null || lon == null) return null
         return try {
             val geocoder = Geocoder(context, Locale.getDefault())
-            @Suppress("DEPRECATION")
-            geocoder.getFromLocation(lat, lon, 1)?.firstOrNull()?.let { addr ->
-                listOfNotNull(addr.subLocality ?: addr.locality, addr.adminArea)
+            val addr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                suspendCancellableCoroutine { cont ->
+                    geocoder.getFromLocation(lat, lon, 1, object : Geocoder.GeocodeListener {
+                        override fun onGeocode(addresses: MutableList<Address>) =
+                            cont.resume(addresses.firstOrNull())
+                        override fun onError(errorMessage: String?) = cont.resume(null)
+                    })
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                geocoder.getFromLocation(lat, lon, 1)?.firstOrNull()
+            }
+            addr?.let {
+                listOfNotNull(it.subLocality ?: it.locality, it.adminArea)
                     .joinToString(", ").ifBlank { null }
             }
         } catch (_: Exception) { null }

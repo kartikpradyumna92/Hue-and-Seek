@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup rules for API 30 and lower (cloud, 25 MB quota).
+     The photos dir is deliberately NOT included: exceeding the quota fails the
+     entire backup, losing the DB + deletion tombstones too. Photo recovery after
+     a restore is the MediaStore sync (Pass 2). The DB is in TRUNCATE journal
+     mode, so there are no -wal/-shm sidecars to snapshot inconsistently. -->
 <full-backup-content>
     <include domain="database" path="colorwalk.db" />
-    <include domain="database" path="colorwalk.db-shm" />
-    <include domain="database" path="colorwalk.db-wal" />
-    <include domain="file" path="datastore" />
     <include domain="sharedpref" path="app_prefs.xml" />
     <exclude domain="cache" path="." />
 </full-backup-content>
