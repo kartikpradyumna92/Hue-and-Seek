@@ -2,6 +2,7 @@ package com.colorwalk.app.viewmodel
 
 import android.graphics.Bitmap
 import android.net.Uri
+import com.colorwalk.app.data.repository.ImportResult
 import com.colorwalk.app.data.repository.PhotoRepository
 import com.colorwalk.app.data.repository.SaveResult
 import com.colorwalk.app.domain.ColorValidator
@@ -140,6 +141,19 @@ class CameraViewModelTest {
         advanceUntilIdle()
 
         assertEquals(CaptureState.StorageError, vm.captureState.value)
+    }
+
+    // ── onPhotoImported ──────────────────────────────────────────────────────
+
+    @Test
+    fun onPhotoImported_withAlreadyImported_transitionsToImportDuplicate() = runTest {
+        coEvery { repo.importPhoto(any(), any()) } returns ImportResult.AlreadyImported
+
+        val vm = buildViewModel()
+        vm.onPhotoImported(mockk(relaxed = true))
+        advanceUntilIdle()
+
+        assertEquals(CaptureState.ImportDuplicate, vm.captureState.value)
     }
 
     // ── resetState ───────────────────────────────────────────────────────────

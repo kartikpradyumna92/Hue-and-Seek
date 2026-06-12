@@ -35,7 +35,7 @@ class StreakReminderReceiver : BroadcastReceiver() {
 
                 if (!capturedToday) {
                     val colorName = colorForDay(System.currentTimeMillis()).name
-                    val streak    = StreakCalculator.compute(dao.getRecentPhotoDates())
+                    val streak    = StreakCalculator.compute(dao.getAllPhotoDates())
                     NotificationHelper.showReminder(context, colorName, streak)
                 }
 

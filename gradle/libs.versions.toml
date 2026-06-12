@@ -9,7 +9,6 @@ room = "2.6.1"
 lifecycle = "2.8.2"
 navigation = "2.7.7"
 coil = "2.6.0"
-palette = "1.0.0"
 gms-location = "21.3.0"
 coroutines = "1.8.1"
 datastore = "1.1.1"
@@ -43,7 +42,6 @@ camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", vers
 camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 camerax-extensions = { group = "androidx.camera", name = "camera-extensions", version.ref = "camerax" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
-palette = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
 gms-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "gms-location" }
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "coroutines" }

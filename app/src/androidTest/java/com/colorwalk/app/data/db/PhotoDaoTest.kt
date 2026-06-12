@@ -133,45 +133,20 @@ class PhotoDaoTest {
         assertNull(result)
     }
 
-    // ── getRecentPhotoDates ──────────────────────────────────────────────────
+    // ── getAllPhotoDates ──────────────────────────────────────────────────────
 
     @Test
-    fun getRecentPhotoDates_returnsDateTakenValues() = runTest {
+    fun getAllPhotoDates_returnsDateTakenValues() = runTest {
         val ts1 = midnightToday() + 1000L
         val ts2 = midnightToday() + 2000L
         dao.insert(makeEntity(dateTaken = ts1))
         dao.insert(makeEntity(dateTaken = ts2))
 
-        val dates = dao.getRecentPhotoDates()
+        val dates = dao.getAllPhotoDates()
         assertEquals(2, dates.size)
         assertTrue(dates.contains(ts1))
         assertTrue(dates.contains(ts2))
     }
-
-    @Test
-    fun getRecentPhotoDates_limitedToSixtyMostRecent() = runTest {
-        val baseTime = midnightToday() - (70L * 24 * 60 * 60 * 1000L)
-        // Insert 70 photos, each a day apart
-        for (i in 0 until 70) {
-            dao.insert(makeEntity(dateTaken = baseTime + i * 24 * 60 * 60 * 1000L))
-        }
-
-        val dates = dao.getRecentPhotoDates()
-        assertEquals("Should return at most 60 dates", 60, dates.size)
-    }
-
-    @Test
-    fun getRecentPhotoDates_returnsNewestFirst() = runTest {
-        val ts1 = midnightToday() - 86_400_000L  // yesterday
-        val ts2 = midnightToday() + 3600_000L    // today
-        dao.insert(makeEntity(dateTaken = ts1))
-        dao.insert(makeEntity(dateTaken = ts2))
-
-        val dates = dao.getRecentPhotoDates()
-        assertTrue("Most recent date should come first", dates[0] > dates[1])
-    }
-
-    // ── getAllPhotoDates ──────────────────────────────────────────────────────
 
     @Test
     fun getAllPhotoDates_returnsAllDatesWithoutLimit() = runTest {

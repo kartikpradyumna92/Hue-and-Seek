@@ -354,7 +354,7 @@ fun HomeScreen(
             Icon(
                 Icons.Default.Settings,
                 contentDescription = "Notification settings",
-                tint = Color.White,
+                tint = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.size(28.dp)
             )
         }

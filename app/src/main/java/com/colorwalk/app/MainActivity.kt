@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -42,6 +43,18 @@ class MainActivity : ComponentActivity() {
         NotificationHelper.createChannel(this)
         _themeMode = NotificationPrefs.getThemeMode(this)
         if (NotificationPrefs.isEnabled(this)) AlarmScheduler.scheduleBoth(this)
+
+        // A4: ACCESS_MEDIA_LOCATION shows no dialog — the system grants it silently
+        // when the app already has photo access, but only if actually requested.
+        // Existing users never revisit the permissions screen, so request it here.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_MEDIA_LOCATION)
+                != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this, arrayOf(Manifest.permission.ACCESS_MEDIA_LOCATION), 0
+            )
+        }
 
         setContent {
             ColorWalkTheme(themeMode = _themeMode) {
@@ -99,6 +112,17 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
                         add(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
                         add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        // No dialog of its own — granted silently alongside the photo
+                        // permission, but MUST be requested or MediaStore redacts GPS
+                        // EXIF and the location backfill finds nothing (A4).
+                        add(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                    } else {
+                        // API 26-28: writing the gallery copy to Pictures/ColorWalk is a
+                        // direct file write and needs the storage WRITE permission (A5).
+                        // Same "Storage" dialog group as READ — no extra prompt.
+                        add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     }
                 }
             }

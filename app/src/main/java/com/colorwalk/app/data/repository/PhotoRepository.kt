@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.location.Geocoder
 import android.media.ExifInterface
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -98,19 +99,33 @@ class PhotoRepository @Inject constructor(
     }
 
     suspend fun tagPhotoLocation(id: Long, locationName: String) = withContext(Dispatchers.IO) {
-        // Inherit lat/lon from an existing photo with the same name so coordinate clustering works.
-        val ref = dao.getAllPhotosSnapshot()
-            .firstOrNull { it.locationName == locationName && it.latitude != null && it.longitude != null }
-        dao.updateLocation(id, ref?.latitude, ref?.longitude, locationName)
+        val photos = dao.getAllPhotosSnapshot()
+        val photo = photos.firstOrNull { it.id == id } ?: return@withContext
+
+        // A photo with a usable GPS fix keeps its own coordinates — naming it must
+        // never overwrite real data (B7). Only photos without a fix inherit lat/lon
+        // from a same-named photo so coordinate clustering still works.
+        if (hasRealFix(photo.latitude, photo.longitude)) {
+            dao.updateLocation(id, photo.latitude, photo.longitude, locationName)
+        } else {
+            val ref = photos.firstOrNull {
+                it.id != id && it.locationName == locationName && hasRealFix(it.latitude, it.longitude)
+            }
+            dao.updateLocation(id, ref?.latitude, ref?.longitude, locationName)
+        }
     }
+
+    /** True for coordinates that are present and not the (0,0) "null island" bad fix. */
+    private fun hasRealFix(lat: Double?, lon: Double?): Boolean =
+        lat != null && lon != null && !(Math.abs(lat) < 0.001 && Math.abs(lon) < 0.001)
 
     suspend fun getStreak(): Int = withContext(Dispatchers.IO) {
-        StreakCalculator.compute(dao.getRecentPhotoDates())
+        StreakCalculator.compute(dao.getAllPhotoDates())
     }
 
-    /** Day indices (local-tz) for all photos in the last 60 days — used by history strip and review check. */
+    /** Day indices (local-tz) for all photos — used by history strip and review check. */
     suspend fun getCapturedDayIndices(): Set<Int> = withContext(Dispatchers.IO) {
-        dao.getRecentPhotoDates()
+        dao.getAllPhotoDates()
             .map { StreakCalculator.epochMillisToDayIndex(it) }
             .toHashSet()
     }
@@ -157,6 +172,8 @@ class PhotoRepository @Inject constructor(
                     dominantColorHex = validation.dominantHex
                 )
             )
+            // A re-captured photo is a deliberate re-add — drop any matching tombstone.
+            DeletionTombstones.clear(context, filename, now)
             SaveResult.Success(Uri.fromFile(privateFile), validation)
         }
 
@@ -166,12 +183,18 @@ class PhotoRepository @Inject constructor(
             val dateTaken = readPhotoDate(uri) ?: return@withContext ImportResult.NoDateMetadata
             if (!isToday(dateTaken)) return@withContext ImportResult.NotTakenToday(dateTaken)
 
+            // Re-importing the same photo would insert a second row pointing at the
+            // same file (B5) — exact-millis timestamp match identifies it cheaply.
+            if (dao.countByDateTaken(dateTaken) > 0) return@withContext ImportResult.AlreadyImported
+
             val bitmap = decodeBitmapFromUri(uri) ?: return@withContext ImportResult.StorageError
             val validation = ColorValidator.validate(bitmap, targetColor)
             if (!validation.passed) return@withContext ImportResult.ValidationFailed(validation)
 
             // Photo picker URIs are temporary — copy to private storage so display always works.
-            val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(dateTaken))}.jpg"
+            // Millis suffix matches savePhoto: two photos taken the same second must not
+            // collide on filename and silently overwrite each other (B5).
+            val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(dateTaken))}_${dateTaken % 1000}.jpg"
             val privateFile = saveToPrivateStorage(bitmap, filename)
                 ?: return@withContext ImportResult.StorageError
 
@@ -189,6 +212,9 @@ class PhotoRepository @Inject constructor(
                     dominantColorHex = validation.dominantHex
                 )
             )
+            // Re-importing a previously deleted photo is a deliberate re-add — drop
+            // any matching tombstone so future syncs can recover it again.
+            DeletionTombstones.clear(context, filename, dateTaken)
             ImportResult.Success(Uri.fromFile(privateFile), validation)
         }
 
@@ -261,6 +287,15 @@ class PhotoRepository @Inject constructor(
 
         // existingTimestamps: dedup guard so a re-sync never inserts the same photo twice.
         val existingTimestamps = existingRows.map { it.dateTaken }.toHashSet()
+        // B6: DATE_TAKEN sometimes only survives at *second* precision (filename
+        // fallback, OEM quirks), while DB rows hold millis — also dedup on
+        // second-truncated timestamps so a precision mismatch can't duplicate a photo.
+        val existingSeconds = existingRows.map { it.dateTaken / 1000 }.toHashSet()
+
+        // A2 guard: photos the user explicitly deleted must never be re-imported, even
+        // when their MediaStore copy couldn't be removed (non-owned after a reinstall).
+        val deletedNames = DeletionTombstones.deletedFilenames(context)
+        val deletedDates = DeletionTombstones.deletedDates(context)
 
         val allExistingDates = dao.getAllPhotoDates()
         // existingDays: still needed to trigger content:// URI migration for known days.
@@ -300,6 +335,10 @@ class PhotoRepository @Inject constructor(
                     dateTaken = parseDateFromFilename(name) ?: continue
                 }
 
+                // Never resurrect a photo the user explicitly deleted (A2) — and never
+                // use its MediaStore entry as a migration source either.
+                if (name in deletedNames || dateTaken in deletedDates) continue
+
                 val day = StreakCalculator.epochMillisToDayIndex(dateTaken)
                 val mediaId = c.getLong(idCol)
                 val mediaUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId)
@@ -334,12 +373,14 @@ class PhotoRepository @Inject constructor(
                         dao.updateFilePath(missingEntity.id, recovered.absolutePath)
                         existingFilenames.add(name)
                         existingTimestamps.add(missingEntity.dateTaken)
+                        existingSeconds.add(missingEntity.dateTaken / 1000)
                     }
                     continue
                 }
 
-                // Skip if exact millisecond timestamp already in DB (primary dedup guard).
-                if (dateTaken in existingTimestamps) continue
+                // Skip if this timestamp is already in the DB (primary dedup guard) —
+                // exact millis first, second-precision as the tolerance fallback (B6).
+                if (dateTaken in existingTimestamps || dateTaken / 1000 in existingSeconds) continue
 
                 // Genuinely new photo — recover it (fresh reinstall, or first sync).
                 val privateFile = copyMediaUriToPrivateStorage(name, mediaUri)
@@ -357,6 +398,7 @@ class PhotoRepository @Inject constructor(
                     )
                 )
                 existingTimestamps.add(dateTaken)
+                existingSeconds.add(dateTaken / 1000)
                 existingDays.add(day)
             }
         }
@@ -378,6 +420,10 @@ class PhotoRepository @Inject constructor(
 
     /** Deletes a photo from the app DB, private storage, and MediaStore. */
     suspend fun deletePhoto(photo: PhotoEntity) = withContext(Dispatchers.IO) {
+        // Tombstone FIRST: if the MediaStore copy can't be removed (it is owned by a
+        // previous install after a reinstall), syncGalleryWithDatabase() would otherwise
+        // re-import the photo on the next launch — the A2 "resurrection" bug.
+        DeletionTombstones.record(context, resolveFilename(photo.filePath), photo.dateTaken)
         try {
             val path = photo.filePath
             when {
@@ -400,6 +446,23 @@ class PhotoRepository @Inject constructor(
         dao.deleteById(photo.id)
     }
 
+    /** Best-effort display filename for any of the three filePath shapes we store. */
+    private fun resolveFilename(path: String): String? = try {
+        when {
+            path.startsWith("/") -> File(path).name
+            else -> {
+                val uri = Uri.parse(path)
+                when (uri.scheme) {
+                    "file" -> uri.lastPathSegment
+                    "content" -> context.contentResolver.query(
+                        uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null
+                    )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+                    else -> null
+                }
+            }
+        }
+    } catch (_: Exception) { null }
+
     private fun deleteFromMediaStore(filename: String) {
         if (!filename.startsWith("ColorWalk_")) return
         try {
@@ -413,9 +476,17 @@ class PhotoRepository @Inject constructor(
 
     // ── private helpers ──────────────────────────────────────────────────────
 
+    /**
+     * Recovers a timestamp from "ColorWalk_yyyyMMdd_HHmmss[_SSS].jpg". Filenames carry
+     * a millis suffix since v1.12 — restoring it keeps the parsed value identical to
+     * the DB's millisecond dateTaken so the sync dedup guard matches exactly (B6).
+     */
     private fun parseDateFromFilename(name: String): Long? = try {
-        val stem = name.removePrefix("ColorWalk_").removeSuffix(".jpg")
-        SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(stem)?.time
+        val parts = name.removePrefix("ColorWalk_").removeSuffix(".jpg").split("_")
+        if (parts.size < 2) null
+        else SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            .parse("${parts[0]}_${parts[1]}")?.time
+            ?.plus(parts.getOrNull(2)?.toLongOrNull()?.takeIf { it in 0..999 } ?: 0L)
     } catch (_: Exception) { null }
 
     /** Saves a bitmap to the app's private files directory. Always succeeds or returns null. */
@@ -457,11 +528,19 @@ class PhotoRepository @Inject constructor(
                 dir.mkdirs()
                 val file = File(dir, filename)
                 FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-                if (lat != null && lon != null) {
-                    val exif = ExifInterface(file.absolutePath)
-                    writeGpsExif(exif, lat, lon)
-                    exif.saveAttributes()
-                }
+                // bitmap.compress writes no EXIF — set the capture time so the media
+                // scanner indexes a correct DATE_TAKEN, plus GPS when available.
+                val exif = ExifInterface(file.absolutePath)
+                val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date(now))
+                exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
+                exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
+                if (lat != null && lon != null) writeGpsExif(exif, lat, lon)
+                exif.saveAttributes()
+                // Without an explicit scan the file is invisible to the system gallery
+                // and to our own MediaStore-based sync/delete queries (A5).
+                MediaScannerConnection.scanFile(
+                    context, arrayOf(file.absolutePath), arrayOf("image/jpeg"), null
+                )
             }
         } catch (_: Exception) { /* best-effort — never block the capture flow */ }
     }
@@ -529,14 +608,26 @@ class PhotoRepository @Inject constructor(
         } catch (_: Exception) { null }
     }
 
-    private fun readPhotoLocation(uri: Uri): Pair<Double?, Double?> = try {
+    private fun readPhotoLocation(uri: Uri): Pair<Double?, Double?> {
+        // On Android 10+ MediaStore redacts GPS EXIF from opened streams unless the
+        // caller holds ACCESS_MEDIA_LOCATION AND opens the URI via setRequireOriginal
+        // (A4). Try the original first; fall back to the plain stream for URIs that
+        // don't support it (photo picker) or when the permission is missing.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                return readExifLatLon(MediaStore.setRequireOriginal(uri))
+            } catch (_: Exception) { /* fall through to the (possibly redacted) stream */ }
+        }
+        return try { readExifLatLon(uri) } catch (_: Exception) { Pair(null, null) }
+    }
+
+    private fun readExifLatLon(uri: Uri): Pair<Double?, Double?> =
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val exif = ExifInterface(stream)
             val latLon = FloatArray(2)
             if (exif.getLatLong(latLon)) Pair(latLon[0].toDouble(), latLon[1].toDouble())
             else Pair(null, null)
         } ?: Pair(null, null)
-    } catch (_: Exception) { Pair(null, null) }
 
     private fun decodeBitmapFromUri(uri: Uri): Bitmap? = try {
         var bmp = context.contentResolver.openInputStream(uri)
@@ -597,5 +688,6 @@ sealed class ImportResult {
     data class ValidationFailed(val validation: ColorValidator.ValidationResult) : ImportResult()
     object NoDateMetadata : ImportResult()
     data class NotTakenToday(val dateTaken: Long) : ImportResult()
+    object AlreadyImported : ImportResult()
     object StorageError : ImportResult()
 }

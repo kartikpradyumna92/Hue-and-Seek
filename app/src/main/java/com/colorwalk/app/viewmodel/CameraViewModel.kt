@@ -27,6 +27,7 @@ sealed class CaptureState {
     // Import-specific failures
     object ImportNoDate : CaptureState()
     data class ImportWrongDay(val dateTaken: Long) : CaptureState()
+    object ImportDuplicate : CaptureState()
 }
 
 @HiltViewModel
@@ -65,6 +66,7 @@ class CameraViewModel @Inject constructor(
                 is ImportResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, color.name, result.validation.actualDominantColor)
                 ImportResult.NoDateMetadata      -> CaptureState.ImportNoDate
                 is ImportResult.NotTakenToday    -> CaptureState.ImportWrongDay(result.dateTaken)
+                ImportResult.AlreadyImported     -> CaptureState.ImportDuplicate
                 ImportResult.StorageError        -> CaptureState.StorageError
             }
         }

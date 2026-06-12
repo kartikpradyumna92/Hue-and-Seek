@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -36,6 +37,8 @@ class PhotoRepositoryIntegrationTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
+        // Tombstones live in shared prefs — start each test clean.
+        context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit().clear().commit()
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
@@ -71,7 +74,10 @@ class PhotoRepositoryIntegrationTest {
     private suspend fun insertPhoto(
         dateTaken: Long,
         colorName: String = "Red",
-        colorHex: String = "#E53935"
+        colorHex: String = "#E53935",
+        latitude: Double? = null,
+        longitude: Double? = null,
+        locationName: String? = null
     ): Long {
         return db.photoDao().insert(
             PhotoEntity(
@@ -79,9 +85,9 @@ class PhotoRepositoryIntegrationTest {
                 colorName = colorName,
                 colorHex = colorHex,
                 dateTaken = dateTaken,
-                latitude = null,
-                longitude = null,
-                locationName = null,
+                latitude = latitude,
+                longitude = longitude,
+                locationName = locationName,
                 dominantColorHex = colorHex
             )
         )
@@ -202,18 +208,117 @@ class PhotoRepositoryIntegrationTest {
     }
 
     @Test
-    fun getCapturedDayIndices_limitedToSixtyDays() = runTest {
-        // Insert 65 photos, each a day apart — only the 60 most recent should be indexed
+    fun getCapturedDayIndices_notLimitedToSixtyDays() = runTest {
+        // A1 regression: indices must cover ALL photo days, not a 60-row window.
         val baseTime = midnightToday() - (64L * 24 * 60 * 60 * 1000L)
         for (i in 0 until 65) {
             insertPhoto(dateTaken = baseTime + i * 24 * 60 * 60 * 1000L)
         }
 
         val indices = repo.getCapturedDayIndices()
-        assertEquals(
-            "getCapturedDayIndices should be bounded by the 60-entry LIMIT in getRecentPhotoDates",
-            60,
-            indices.size
+        assertEquals("All 65 photo days must be indexed", 65, indices.size)
+    }
+
+    // ── long streaks (A1 regression) ──────────────────────────────────────────
+
+    @Test
+    fun getStreak_seventyConsecutiveDays_returnsSeventy() = runTest {
+        // Streaks longer than 60 days must be counted in full (milestones go to 365).
+        for (i in 0 until 70) {
+            insertPhoto(dateTaken = daysAgoNoon(i))
+        }
+        assertEquals(70, repo.getStreak())
+    }
+
+    @Test
+    fun getStreak_multiplePhotosPerDay_doesNotCapStreak() = runTest {
+        // 40 consecutive days × 3 photos each = 120 rows. Under the old 60-row
+        // LIMIT only the most recent ~20 days were visible to the calculator.
+        for (day in 0 until 40) {
+            repeat(3) { n ->
+                insertPhoto(dateTaken = daysAgoNoon(day) + n * 1000L)
+            }
+        }
+        assertEquals(40, repo.getStreak())
+    }
+
+    // ── deletion tombstones (A2 regression) ───────────────────────────────────
+
+    @Test
+    fun deletePhoto_recordsFilenameAndDateTombstones() = runTest {
+        val ts = daysAgoNoon(1)
+        val id = insertPhoto(dateTaken = ts) // filePath = file:///photos/test_<ts>.jpg
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+
+        repo.deletePhoto(photo)
+
+        assertTrue(
+            "Deleted filename must be tombstoned",
+            "test_$ts.jpg" in DeletionTombstones.deletedFilenames(context)
         )
+        assertTrue(
+            "Deleted dateTaken must be tombstoned",
+            ts in DeletionTombstones.deletedDates(context)
+        )
+        assertTrue("Row must be gone from the DB", db.photoDao().getAllPhotosSnapshot().isEmpty())
+    }
+
+    @Test
+    fun tombstones_recordAndClear_roundTrip() {
+        DeletionTombstones.record(context, "ColorWalk_20260611_120000_123.jpg", 1_780_000_000_000L)
+        assertTrue("ColorWalk_20260611_120000_123.jpg" in DeletionTombstones.deletedFilenames(context))
+        assertTrue(1_780_000_000_000L in DeletionTombstones.deletedDates(context))
+
+        DeletionTombstones.clear(context, "ColorWalk_20260611_120000_123.jpg", 1_780_000_000_000L)
+        assertFalse("ColorWalk_20260611_120000_123.jpg" in DeletionTombstones.deletedFilenames(context))
+        assertFalse(1_780_000_000_000L in DeletionTombstones.deletedDates(context))
+    }
+
+    @Test
+    fun tombstones_recordWithNullFilename_stillRecordsDate() {
+        DeletionTombstones.record(context, null, 42L)
+        assertTrue(42L in DeletionTombstones.deletedDates(context))
+    }
+
+    // ── tagPhotoLocation (B7 regression) ──────────────────────────────────────
+
+    @Test
+    fun tagPhotoLocation_keepsOwnCoordinates_whenPhotoHasRealFix() = runTest {
+        val id = insertPhoto(dateTaken = daysAgoNoon(1), latitude = 37.77, longitude = -122.41)
+
+        repo.tagPhotoLocation(id, "San Francisco")
+
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        assertEquals("San Francisco", photo.locationName)
+        assertEquals("Real GPS fix must never be overwritten by tagging", 37.77, photo.latitude!!, 0.0001)
+        assertEquals(-122.41, photo.longitude!!, 0.0001)
+    }
+
+    @Test
+    fun tagPhotoLocation_inheritsCoordinates_fromSameNamedPhoto_whenNoFix() = runTest {
+        insertPhoto(
+            dateTaken = daysAgoNoon(2),
+            latitude = 37.77, longitude = -122.41, locationName = "San Francisco"
+        )
+        val id = insertPhoto(dateTaken = daysAgoNoon(1)) // no coordinates
+
+        repo.tagPhotoLocation(id, "San Francisco")
+
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        assertEquals("San Francisco", photo.locationName)
+        assertEquals(37.77, photo.latitude!!, 0.0001)
+        assertEquals(-122.41, photo.longitude!!, 0.0001)
+    }
+
+    @Test
+    fun tagPhotoLocation_nullIslandCoordinates_areTreatedAsNoFix() = runTest {
+        val id = insertPhoto(dateTaken = daysAgoNoon(1), latitude = 0.0, longitude = 0.0)
+
+        repo.tagPhotoLocation(id, "Somewhere")
+
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        assertEquals("Somewhere", photo.locationName)
+        assertNull("A (0,0) bad fix must not be kept as a real coordinate", photo.latitude)
+        assertNull(photo.longitude)
     }
 }

@@ -96,7 +96,19 @@
       "Bash(export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\")",
       "Bash(/Users/karteekpbulusu/Documents/KB_DataScience/ColorPicture/gradlew -p /Users/karteekpbulusu/Documents/KB_DataScience/ColorPicture compileDebugKotlin)",
       "Bash(java -cp /Users/karteekpbulusu/Documents/KB_DataScience/ColorPicture/gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain --version)",
-      "Bash(/Users/karteekpbulusu/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle :app:compileDebugKotlin --no-daemon)"
+      "Bash(/Users/karteekpbulusu/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle :app:compileDebugKotlin --no-daemon)",
+      "WebSearch",
+      "Bash(./gradlew testDebugUnitTest --console=plain -q)",
+      "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle testDebugUnitTest --console=plain -q)",
+      "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle testDebugUnitTest compileDebugAndroidTestKotlin --console=plain -q)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(git -C /Users/karteekpbulusu/Documents/KB_DataScience/ColorPicture check-ignore BUGS_TODO.txt)",
+      "Bash(git -C /Users/karteekpbulusu/Documents/KB_DataScience/ColorPicture ls-files BUGS_TODO.txt)",
+      "Bash(git -C /Users/karteekpbulusu/Documents/KB_DataScience/ColorPicture check-ignore -v BUGS_TODO.txt)",
+      "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle assembleDebug --console=plain -q)",
+      "Bash(grep -rA1 \"READ_EXTERNAL_STORAGE\" app/build/intermediates/merged_manifests/)",
+      "Bash(~/.gradle/wrapper/dists/gradle-9.4.1-bin/arn2x92ynaizyzdaamcbpbhtj/gradle-9.4.1/bin/gradle assembleDebug testDebugUnitTest compileDebugAndroidTestKotlin --console=plain -q)",
+      "Bash(git -C /Users/karteekpbulusu/Documents/KB_DataScience/ColorPicture show HEAD:app/src/main/java/com/colorwalk/app/data/repository/PhotoRepository.kt)"
     ],
     "additionalDirectories": [
       "/tmp",

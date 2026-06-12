@@ -20,12 +20,14 @@ interface PhotoDao {
     @Query("SELECT COUNT(*) FROM photos WHERE colorName = :colorName")
     suspend fun countByColor(colorName: String): Int
 
+    @Query("SELECT COUNT(*) FROM photos WHERE dateTaken = :dateTaken")
+    suspend fun countByDateTaken(dateTaken: Long): Int
+
     @Query("SELECT dateTaken FROM photos WHERE dateTaken >= :midnightMs AND dateTaken < :tomorrowMidnightMs LIMIT 1")
     suspend fun getPhotoForDay(midnightMs: Long, tomorrowMidnightMs: Long): Long?
 
-    @Query("SELECT dateTaken FROM photos ORDER BY dateTaken DESC LIMIT 60")
-    suspend fun getRecentPhotoDates(): List<Long>
-
+    // No LIMIT: streaks are computed from every photo date. A LIMIT on photo
+    // *rows* silently caps the streak (rows != days when a day has several photos).
     @Query("SELECT dateTaken FROM photos")
     suspend fun getAllPhotoDates(): List<Long>
 

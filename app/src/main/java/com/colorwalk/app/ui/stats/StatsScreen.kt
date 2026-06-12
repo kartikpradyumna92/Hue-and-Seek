@@ -47,7 +47,6 @@ import com.colorwalk.app.viewmodel.StatsViewModel
 import java.io.File as JavaFile
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -457,8 +456,10 @@ private fun buildMonthGrid(year: Int, month: Int): List<List<DayCell?>> {
 
     for (day in 1..daysInMonth) {
         cal.set(Calendar.DAY_OF_MONTH, day)
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        val dayIndex = TimeUnit.MILLISECONDS.toDays(cal.timeInMillis).toInt()
+        // Noon, not midnight: some zones skip midnight on DST start, and the index
+        // must agree with StreakCalculator's — never re-implement the day math (B4).
+        cal.set(Calendar.HOUR_OF_DAY, 12)
+        val dayIndex = StreakCalculator.epochMillisToDayIndex(cal.timeInMillis)
         cells.add(DayCell(day, dayIndex))
     }
 

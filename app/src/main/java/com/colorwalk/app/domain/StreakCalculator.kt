@@ -1,7 +1,7 @@
 package com.colorwalk.app.domain
 
-import java.util.Calendar
-import java.util.concurrent.TimeUnit
+import java.time.Instant
+import java.time.ZoneId
 
 object StreakCalculator {
 
@@ -27,12 +27,17 @@ object StreakCalculator {
         return streak
     }
 
-    internal fun epochMillisToDayIndex(millis: Long): Int {
-        val cal = Calendar.getInstance().apply { timeInMillis = millis }
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        return TimeUnit.MILLISECONDS.toDays(cal.timeInMillis).toInt()
-    }
+    /**
+     * Local-calendar-date index (epoch day) for an instant. Uses java.time so two
+     * photos on different local dates can never share an index — the previous
+     * implementation divided local-midnight millis by 86,400,000 (UTC days), which
+     * collapsed or skipped a day around DST transitions and in offsets where local
+     * midnight sits within an hour of a UTC day boundary (B4).
+     */
+    internal fun epochMillisToDayIndex(millis: Long): Int =
+        Instant.ofEpochMilli(millis)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+            .toEpochDay()
+            .toInt()
 }

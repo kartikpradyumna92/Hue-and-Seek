@@ -14,8 +14,8 @@ android {
         applicationId = "com.colorwalk.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.12.0"
+        versionCode = 9
+        versionName = "1.13.0"
     }
 
     buildTypes {
@@ -83,7 +83,6 @@ dependencies {
     implementation(libs.camerax.extensions)
 
     implementation(libs.coil.compose)
-    implementation(libs.palette)
     implementation(libs.gms.location)
     implementation(libs.coroutines.android)
     implementation(libs.coroutines.play.services)

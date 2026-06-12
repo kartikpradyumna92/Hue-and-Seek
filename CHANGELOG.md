@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.13.0] - 2026-06-11
+
+Bug-fix release from a full-codebase review: all 5 critical bugs plus 7 high-priority bugs fixed, color validation rewritten.
+
+### Changed
+- **Color validation rewritten — the daily color must now truly pop.** The validator is a deterministic HSV-band histogram: every pixel maps to exactly one color (full 0–360° hue coverage, no first-match ordering bias), neutral pixels (too dark/gray) count toward nothing, and pixels in the center of the frame weigh ×2. A photo passes only when the target color both beats every other walk color **and** covers ≥15% of the weighted frame — a mostly-gray scene with a sliver of the day's color no longer slips through (captures and imports alike). Brown is now recognized as dark/muted orange, washed-out light reds count as Pink, and cyan sky finally counts as Blue. Failure cards are more specific: "Green dominated (4% was Red)" vs "More Red Needed — fills only 9% of the frame".
+- Removed the `androidx.palette` dependency — the displayed dominant hex now comes from the validator's own winning bucket (the average shade actually photographed).
+- **versionCode** bumped from 8 → 9; **versionName** from 1.12.0 → 1.13.0.
+
+### Fixed
+- **Streak could never exceed 60 days** — the streak query was capped at 60 photo *rows* (fewer days when a day has several photos), making the 100–365-day milestones unreachable. Streak, home history strip, and reminder notifications now compute from all photo dates.
+- **Deleted photos resurrected after reinstall** — after a reinstall the app can't delete MediaStore copies owned by the previous install, so gallery sync re-imported every deleted photo. Deletions are now recorded as tombstones (filename + timestamp, included in Auto Backup) that sync consults before re-importing; re-capturing or re-importing a photo clears its tombstone.
+- **Photo permission auto-denied on Android 8–12** — `READ_EXTERNAL_STORAGE` was requested at runtime but never declared in the manifest, so the dialog never appeared and reinstall recovery / location backfill silently failed on API 26–32.
+- **Location backfill found no GPS on Android 10+** — MediaStore redacts GPS EXIF unless the URI is opened via `setRequireOriginal()` with `ACCESS_MEDIA_LOCATION` actually granted. Both are now done; the permission is requested silently at startup for existing users (it has no dialog).
+- **Gallery copy invisible on Android 8–9** — the pre-Android-10 publish path never invoked the media scanner, so photos never appeared in the system gallery and were invisible to sync recovery. Now scans the file, writes EXIF capture date (for a correct `DATE_TAKEN`), and requests `WRITE_EXTERNAL_STORAGE` on those API levels.
+- **Brown days were nearly impossible to pass** — brown pixels were classified as Red/Orange by the old first-match ordering (see validator rewrite above).
+- **Settings gear invisible in light theme** — was hardcoded white on a near-white background.
+- **Day indexing could merge/skip days around DST** — day indices now use `java.time` local dates (`LocalDate.toEpochDay`) instead of dividing local-midnight millis by UTC day length; the Stats calendar no longer re-implements its own copy of the math. Verified with DST spring-forward/fall-back and UTC+13 regression tests.
+- **Re-importing the same photo created duplicate gallery entries** — imports are now rejected up front with an "Already Imported" card; import filenames also carry a millisecond suffix so two photos taken in the same second can't overwrite each other.
+- **Sync could duplicate photos when `DATE_TAKEN` lost millisecond precision** — the filename fallback parser now restores the millis suffix, and the dedup guard also matches second-truncated timestamps.
+- **Manually tagging a photo's location could erase its real GPS fix** — tagging now keeps the photo's own coordinates whenever it has a usable fix and only inherits from a same-named photo when it has none.
+
+### Tests
+- 157 JVM unit tests (was 127): real classifier/dominance tests for the rewritten validator (the old core was untestable off-device), >60-day and multi-photo-per-day streak regressions, DST/timezone day-index regressions, import-duplicate mapping.
+- New instrumented tests: deletion tombstones, location-tagging coordinate rules, uncapped day indices.
+
+---
+
 ## [1.12.0] - 2026-06-08
 
 ### Added

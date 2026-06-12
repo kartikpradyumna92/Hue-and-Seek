@@ -471,12 +471,20 @@ private fun ResultCard(
             "Dominant: ${state.dominantHex}",
             Color(0xFF4CAF50)
         )
-        is CaptureState.Failed -> Quad(
-            Icons.Default.ErrorOutline,
-            "$targetColorName Isn't Dominant",
-            "${state.actualDominant} dominated (${(state.matchPercent * 100).toInt()}% was $targetColorName). Make $targetColorName the main subject.",
-            Color(0xFFFF5722)
-        )
+        is CaptureState.Failed -> {
+            val pct = (state.matchPercent * 100).toInt()
+            if (state.actualDominant == targetColorName) Quad(
+                Icons.Default.ErrorOutline,
+                "More $targetColorName Needed",
+                "$targetColorName leads, but fills only $pct% of the frame. Get closer so it really pops!",
+                Color(0xFFFF5722)
+            ) else Quad(
+                Icons.Default.ErrorOutline,
+                "$targetColorName Isn't Dominant",
+                "${state.actualDominant} dominated ($pct% was $targetColorName). Make $targetColorName the main subject.",
+                Color(0xFFFF5722)
+            )
+        }
         is CaptureState.ImportWrongDay -> Quad(
             Icons.Default.ErrorOutline,
             "Wrong Day",
@@ -487,6 +495,12 @@ private fun ResultCard(
             Icons.Default.ErrorOutline,
             "No Date Info",
             "This photo has no date metadata — can't verify it was taken today.",
+            Color(0xFFFF9800)
+        )
+        CaptureState.ImportDuplicate -> Quad(
+            Icons.Default.ErrorOutline,
+            "Already Imported",
+            "This photo is already in your gallery.",
             Color(0xFFFF9800)
         )
         else -> Quad(Icons.Default.ErrorOutline, "Error", "Something went wrong.", Color(0xFFFF5722))
