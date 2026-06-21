@@ -5,8 +5,10 @@ import com.colorwalk.app.data.repository.PhotoRepository
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.util.MainDispatcherRule
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -28,7 +30,7 @@ class StatsViewModelTest {
     @Before
     fun setUp() {
         repo = mockk(relaxed = true)
-        coEvery { repo.getAllPhotosSnapshot() } returns emptyList()
+        every { repo.getAllPhotos() } returns flowOf(emptyList())
         coEvery { repo.getStreak() } returns 0
     }
 
@@ -94,7 +96,7 @@ class StatsViewModelTest {
 
     @Test
     fun load_singlePhoto_totalPhotosIsOne() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(makePhoto(1L))
+        every { repo.getAllPhotos() } returns flowOf(listOf(makePhoto(1L)))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(1, vm.state.value.totalPhotos)
@@ -102,9 +104,9 @@ class StatsViewModelTest {
 
     @Test
     fun load_threePhotos_totalPhotosIsThree() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(
+        every { repo.getAllPhotos() } returns flowOf(listOf(
             makePhoto(1L), makePhoto(2L, dateTaken = daysAgo(1)), makePhoto(3L, dateTaken = daysAgo(2))
-        )
+        ))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(3, vm.state.value.totalPhotos)
@@ -114,7 +116,7 @@ class StatsViewModelTest {
 
     @Test
     fun load_singlePhoto_activeDaysIsOne() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(makePhoto(1L))
+        every { repo.getAllPhotos() } returns flowOf(listOf(makePhoto(1L)))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(1, vm.state.value.totalActiveDays)
@@ -122,10 +124,10 @@ class StatsViewModelTest {
 
     @Test
     fun load_twoPhotosOnDifferentDays_activeDaysIsTwo() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(
+        every { repo.getAllPhotos() } returns flowOf(listOf(
             makePhoto(1L, dateTaken = daysAgo(0)),
             makePhoto(2L, dateTaken = daysAgo(1))
-        )
+        ))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(2, vm.state.value.totalActiveDays)
@@ -134,10 +136,10 @@ class StatsViewModelTest {
     @Test
     fun load_twoPhotosOnSameDay_activeDaysIsOne() = runTest {
         val base = daysAgo(0)
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(
+        every { repo.getAllPhotos() } returns flowOf(listOf(
             makePhoto(1L, dateTaken = base),
             makePhoto(2L, dateTaken = base + 3_600_000L) // same day, 1 hour later
-        )
+        ))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(1, vm.state.value.totalActiveDays)
@@ -148,7 +150,7 @@ class StatsViewModelTest {
     @Test
     fun load_currentStreak_delegatesToRepo() = runTest {
         coEvery { repo.getStreak() } returns 7
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(makePhoto(1L))
+        every { repo.getAllPhotos() } returns flowOf(listOf(makePhoto(1L)))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(7, vm.state.value.currentStreak)
@@ -158,7 +160,7 @@ class StatsViewModelTest {
 
     @Test
     fun load_singlePhoto_bestStreakIsOne() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(makePhoto(1L))
+        every { repo.getAllPhotos() } returns flowOf(listOf(makePhoto(1L)))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(1, vm.state.value.bestStreak)
@@ -167,7 +169,7 @@ class StatsViewModelTest {
     @Test
     fun load_fourConsecutiveDays_bestStreakIsFour() = runTest {
         val photos = (0..3).mapIndexed { i, day -> makePhoto(i.toLong(), dateTaken = daysAgo(day)) }
-        coEvery { repo.getAllPhotosSnapshot() } returns photos
+        every { repo.getAllPhotos() } returns flowOf(photos)
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(4, vm.state.value.bestStreak)
@@ -178,7 +180,7 @@ class StatsViewModelTest {
         // Days 0,1,2 (run=3) and days 5,6 (run=2) — gap at 3,4
         val photos = listOf(0, 1, 2, 5, 6)
             .mapIndexed { i, day -> makePhoto(i.toLong(), dateTaken = daysAgo(day)) }
-        coEvery { repo.getAllPhotosSnapshot() } returns photos
+        every { repo.getAllPhotos() } returns flowOf(photos)
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(3, vm.state.value.bestStreak)
@@ -188,7 +190,7 @@ class StatsViewModelTest {
     fun load_allNonConsecutiveDays_bestStreakIsOne() = runTest {
         val photos = listOf(0, 2, 4, 6)
             .mapIndexed { i, day -> makePhoto(i.toLong(), dateTaken = daysAgo(day)) }
-        coEvery { repo.getAllPhotosSnapshot() } returns photos
+        every { repo.getAllPhotos() } returns flowOf(photos)
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(1, vm.state.value.bestStreak)
@@ -199,7 +201,7 @@ class StatsViewModelTest {
         // Provide a long best streak historically but mock current streak as 2
         coEvery { repo.getStreak() } returns 2
         val photos = (0..9).mapIndexed { i, day -> makePhoto(i.toLong(), dateTaken = daysAgo(day)) }
-        coEvery { repo.getAllPhotosSnapshot() } returns photos
+        every { repo.getAllPhotos() } returns flowOf(photos)
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(2, vm.state.value.currentStreak)
@@ -210,11 +212,11 @@ class StatsViewModelTest {
 
     @Test
     fun load_favouriteColor_isColorWithMostPhotos() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(
+        every { repo.getAllPhotos() } returns flowOf(listOf(
             makePhoto(1L, colorName = "Blue", colorHex = "#1E88E5"),
             makePhoto(2L, colorName = "Blue", colorHex = "#1E88E5"),
             makePhoto(3L, colorName = "Red",  colorHex = "#E53935")
-        )
+        ))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals("Blue", vm.state.value.favouriteColorName)
@@ -223,9 +225,9 @@ class StatsViewModelTest {
 
     @Test
     fun load_singlePhotoColor_isFavourite() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(
+        every { repo.getAllPhotos() } returns flowOf(listOf(
             makePhoto(1L, colorName = "Green", colorHex = "#43A047")
-        )
+        ))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals("Green", vm.state.value.favouriteColorName)
@@ -235,10 +237,10 @@ class StatsViewModelTest {
 
     @Test
     fun load_photosOnTwoDays_photosByDayIndexHasTwoEntries() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(
+        every { repo.getAllPhotos() } returns flowOf(listOf(
             makePhoto(1L, dateTaken = daysAgo(0)),
             makePhoto(2L, dateTaken = daysAgo(1))
-        )
+        ))
         val vm = buildViewModel()
         advanceUntilIdle()
         assertEquals(2, vm.state.value.photosByDayIndex.size)
@@ -248,10 +250,10 @@ class StatsViewModelTest {
     fun load_twoPhotosOnSameDay_photosByDayIndexHasBothAndMostRecentIsFirst() = runTest {
         val earlier = daysAgo(0) - 3_600_000L // 1 hour earlier in the day
         val later   = daysAgo(0)
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(
+        every { repo.getAllPhotos() } returns flowOf(listOf(
             makePhoto(1L, dateTaken = earlier),
             makePhoto(2L, dateTaken = later)
-        )
+        ))
         val vm = buildViewModel()
         advanceUntilIdle()
         val dayIndex = StreakCalculator.epochMillisToDayIndex(later)
@@ -263,7 +265,7 @@ class StatsViewModelTest {
     @Test
     fun load_photosByDayIndex_dayIndexMatchesStreakCalculator() = runTest {
         val ts = daysAgo(3)
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(makePhoto(1L, dateTaken = ts))
+        every { repo.getAllPhotos() } returns flowOf(listOf(makePhoto(1L, dateTaken = ts)))
         val vm = buildViewModel()
         advanceUntilIdle()
         val expectedIndex = StreakCalculator.epochMillisToDayIndex(ts)
@@ -292,7 +294,7 @@ class StatsViewModelTest {
 
     @Test
     fun selectDay_doesNotAffectOtherStateFields() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(makePhoto(1L))
+        every { repo.getAllPhotos() } returns flowOf(listOf(makePhoto(1L)))
         coEvery { repo.getStreak() } returns 5
         val vm = buildViewModel()
         advanceUntilIdle()

@@ -42,7 +42,7 @@ class PhotoRepositoryIntegrationTest {
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repo = PhotoRepository(context, db.photoDao())
+        repo = PhotoRepository(context, db.photoDao(), db)
     }
 
     @After

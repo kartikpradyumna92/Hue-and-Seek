@@ -102,7 +102,16 @@ fun CameraScreen(
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var useFrontCamera by remember { mutableStateOf(false) }
-    var activeZoom by remember { mutableStateOf(1f) }  // actual ratio selected
+    // requestedZoom: the level the user tapped; activeZoom: the ratio the camera
+    // actually applied after clamping to the device's supported range. Only
+    // activeZoom is used for chip highlighting so the UI always reflects reality.
+    var requestedZoom by remember { mutableStateOf(1f) }
+    var activeZoom by remember { mutableStateOf(1f) }
+    var minZoom by remember { mutableStateOf(1f) }
+    var maxZoom by remember { mutableStateOf(20f) }
+    val supportedLevels = remember(minZoom, maxZoom) {
+        ZOOM_LEVELS.filter { it.ratio in minZoom..maxZoom }
+    }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
     DisposableEffect(Unit) { onDispose { cameraExecutor.shutdown() } }
@@ -124,7 +133,12 @@ fun CameraScreen(
                 factory = { ctx ->
                     PreviewView(ctx).also { previewView ->
                         bindCamera(ctx, lifecycleOwner, previewView, cameraSelector) { cap, cam ->
-                            imageCapture = cap; camera = cam
+                            imageCapture = cap
+                            camera = cam
+                            cam.cameraInfo.zoomState.value?.let {
+                                minZoom = it.minZoomRatio
+                                maxZoom = it.maxZoomRatio
+                            }
                         }
                     }
                 },
@@ -132,10 +146,16 @@ fun CameraScreen(
             )
         }
 
-        // Apply zoom without rebinding the camera.
-        // Only LaunchedEffect triggers applyZoom — onClick just updates activeZoom.
-        LaunchedEffect(activeZoom) {
-            camera?.let { applyZoom(it, activeZoom) }
+        // Apply zoom without rebinding the camera. Fires when the user taps a chip
+        // (requestedZoom changes) or when the camera is rebound after a flip (camera
+        // changes). The clamped value is written back to activeZoom so the highlighted
+        // chip always matches what the hardware is actually showing.
+        LaunchedEffect(requestedZoom, camera) {
+            val cam = camera ?: return@LaunchedEffect
+            val state = cam.cameraInfo.zoomState.value ?: return@LaunchedEffect
+            val clamped = requestedZoom.coerceIn(state.minZoomRatio, state.maxZoomRatio)
+            cam.cameraControl.setZoomRatio(clamped)
+            activeZoom = clamped
         }
 
         // Top bar
@@ -191,7 +211,7 @@ fun CameraScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(bottom = 14.dp)
             ) {
-                items(ZOOM_LEVELS) { level ->
+                items(supportedLevels) { level ->
                     val isActive = activeZoom == level.ratio
                     Box(
                         contentAlignment = Alignment.Center,
@@ -204,7 +224,7 @@ fun CameraScreen(
                             )
                     ) {
                         TextButton(
-                            onClick = { activeZoom = level.ratio },
+                            onClick = { requestedZoom = level.ratio },
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(0.dp)
                         ) {
@@ -249,7 +269,9 @@ fun CameraScreen(
                 if (captureState !is CaptureState.Processing) {
                     IconButton(
                         onClick = {
-                            imageCapture?.takePicture(
+                            val capture = imageCapture ?: return@IconButton
+                            viewModel.startCapture()
+                            capture.takePicture(
                                 cameraExecutor,
                                 object : ImageCapture.OnImageCapturedCallback() {
                                     override fun onCaptureSuccess(proxy: ImageProxy) {
@@ -284,6 +306,7 @@ fun CameraScreen(
                                     }
                                     override fun onError(e: ImageCaptureException) {
                                         Log.e("CameraScreen", "Capture error", e)
+                                        viewModel.onCaptureError()
                                     }
                                 }
                             )
@@ -310,6 +333,7 @@ fun CameraScreen(
                 IconButton(
                     onClick = {
                         useFrontCamera = !useFrontCamera
+                        requestedZoom = 1f
                         activeZoom = 1f
                     },
                     modifier = Modifier
@@ -340,13 +364,6 @@ fun CameraScreen(
             )
         }
     }
-}
-
-private fun applyZoom(camera: Camera?, ratio: Float) {
-    if (camera == null) return
-    val state = camera.cameraInfo.zoomState.value ?: return
-    val clamped = ratio.coerceIn(state.minZoomRatio, state.maxZoomRatio)
-    camera.cameraControl.setZoomRatio(clamped)
 }
 
 private fun bindCamera(

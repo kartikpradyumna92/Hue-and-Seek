@@ -156,6 +156,31 @@ class CameraViewModelTest {
         assertEquals(CaptureState.ImportDuplicate, vm.captureState.value)
     }
 
+    // ── startCapture / onCaptureError ────────────────────────────────────────
+
+    @Test
+    fun startCapture_setsProcessingState() {
+        val vm = buildViewModel()
+        vm.startCapture()
+        assertEquals(CaptureState.Processing, vm.captureState.value)
+    }
+
+    @Test
+    fun onCaptureError_setsStorageErrorState() {
+        val vm = buildViewModel()
+        vm.onCaptureError()
+        assertEquals(CaptureState.StorageError, vm.captureState.value)
+    }
+
+    @Test
+    fun onCaptureError_fromProcessing_setsStorageError() {
+        val vm = buildViewModel()
+        vm.startCapture()
+        assertEquals(CaptureState.Processing, vm.captureState.value)
+        vm.onCaptureError()
+        assertEquals(CaptureState.StorageError, vm.captureState.value)
+    }
+
     // ── resetState ───────────────────────────────────────────────────────────
 
     @Test

@@ -14,6 +14,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.room.withTransaction
+import com.colorwalk.app.data.db.AppDatabase
 import com.colorwalk.app.data.db.ColorSummary
 import com.colorwalk.app.data.db.PhotoDao
 import com.colorwalk.app.data.db.PhotoEntity
@@ -47,7 +49,8 @@ import javax.inject.Singleton
 @Singleton
 class PhotoRepository @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val dao: PhotoDao
+    private val dao: PhotoDao,
+    private val db: AppDatabase
 ) {
     // Outlives any single caller: post-save geocode updates must complete even if
     // the capture screen (and its viewModelScope) is gone before the network does.
@@ -70,16 +73,26 @@ class PhotoRepository @Inject constructor(
      * MediaStore entry by filename and read its GPS EXIF (written at capture time by
      * publishToSystemGallery). If GPS is found, update lat/lon and reverse-geocode
      * locationName. After all rows are filled this becomes a no-op.
+     *
+     * C1: Per-photo "attempted" markers are persisted in SharedPreferences so the
+     * MediaStore query is skipped on subsequent Gallery opens once every missing photo
+     * has been tried (whether GPS was found or not).
+     *
+     * C4: All DB location updates are batched in a single transaction.
      */
     suspend fun backfillLocationData() = withContext(Dispatchers.IO) {
-        val missing = dao.getAllPhotosSnapshot()
+        val allMissing = dao.getAllPhotosSnapshot()
             .filter { photo ->
                 val lat = photo.latitude
                 val lon = photo.longitude
                 (lat == null && lon == null) ||
                 (lat != null && lon != null && Math.abs(lat) < 0.001 && Math.abs(lon) < 0.001)
             }
-        if (missing.isEmpty()) return@withContext
+        if (allMissing.isEmpty()) return@withContext
+
+        val attemptedIds = getAttemptedBackfillIds()
+        val toAttempt = allMissing.filter { it.id !in attemptedIds }
+        if (toAttempt.isEmpty()) return@withContext
 
         // Build filename → GPS map from MediaStore EXIF in one pass
         val locationByFilename = mutableMapOf<String, Pair<Double, Double>>()
@@ -102,14 +115,26 @@ class PhotoRepository @Inject constructor(
             }
         }
 
-        // Update each DB row that has a matching MediaStore GPS entry
-        for (photo in missing) {
+        // Resolve location names outside the transaction (network calls)
+        data class LocationUpdate(val id: Long, val lat: Double, val lon: Double, val name: String?)
+        val updates = mutableListOf<LocationUpdate>()
+        for (photo in toAttempt) {
             val filename = java.io.File(photo.filePath).name
                 .takeIf { it.startsWith("ColorWalk_") } ?: continue
             val (lat, lon) = locationByFilename[filename] ?: continue
             val locationName = reverseGeocode(lat, lon)
-            dao.updateLocation(photo.id, lat, lon, locationName)
+            updates.add(LocationUpdate(photo.id, lat, lon, locationName))
         }
+
+        // Batch DB writes in one transaction (C4)
+        if (updates.isNotEmpty()) {
+            db.withTransaction {
+                for (u in updates) dao.updateLocation(u.id, u.lat, u.lon, u.name)
+            }
+        }
+
+        // Mark all attempted IDs so this scan never repeats for these photos (C1)
+        markBackfillAttempted(toAttempt.map { it.id })
     }
 
     suspend fun tagPhotoLocation(id: Long, locationName: String) = withContext(Dispatchers.IO) {
@@ -165,6 +190,7 @@ class PhotoRepository @Inject constructor(
             val validation = ColorValidator.validate(bitmap, targetColor)
             if (!validation.passed) {
                 locationDeferred.cancel()
+                bitmap.recycle()  // C3: release before returning
                 return@withContext SaveResult.ValidationFailed(validation)
             }
 
@@ -176,6 +202,7 @@ class PhotoRepository @Inject constructor(
             val privateFile = saveToPrivateStorage(bitmap, filename)
             if (privateFile == null) {
                 locationDeferred.cancel()
+                bitmap.recycle()  // C3: release before returning
                 return@withContext SaveResult.StorageError
             }
 
@@ -183,6 +210,8 @@ class PhotoRepository @Inject constructor(
 
             // Secondary: publish to system gallery with GPS EXIF so Google Photos shows location.
             publishToSystemGallery(bitmap, filename, now, lat, lon)
+            bitmap.recycle()  // C3: done with the pixel data — private file and MediaStore copy are written
+
             val id = dao.insert(
                 PhotoEntity(
                     filePath = privateFile.absolutePath,   // absolute path — passed as File to Coil
@@ -214,14 +243,18 @@ class PhotoRepository @Inject constructor(
 
             val bitmap = decodeBitmapFromUri(uri) ?: return@withContext ImportResult.StorageError
             val validation = ColorValidator.validate(bitmap, targetColor)
-            if (!validation.passed) return@withContext ImportResult.ValidationFailed(validation)
+            if (!validation.passed) {
+                bitmap.recycle()  // C3: release before returning
+                return@withContext ImportResult.ValidationFailed(validation)
+            }
 
             // Photo picker URIs are temporary — copy to private storage so display always works.
             // Millis suffix matches savePhoto: two photos taken the same second must not
             // collide on filename and silently overwrite each other (B5).
             val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(dateTaken))}_${dateTaken % 1000}.jpg"
             val privateFile = saveToPrivateStorage(bitmap, filename)
-                ?: return@withContext ImportResult.StorageError
+            bitmap.recycle()  // C3: done after the single compress; safe before the null check
+            if (privateFile == null) return@withContext ImportResult.StorageError
 
             val (lat, lon) = readPhotoLocation(uri)
             val id = dao.insert(
@@ -253,6 +286,9 @@ class PhotoRepository @Inject constructor(
      * Pass 2 — MediaStore scan: query for ColorWalk files to recover photos after a
      * fresh reinstall (new UID, no implicit content:// access). Wrapped in try/catch so
      * a SecurityException (READ_MEDIA_IMAGES denied) never silently kills the whole sync.
+     *
+     * C4: file I/O (content copies) happens outside any transaction; the resulting DB
+     * writes are batched in two single transactions (one per pass) to reduce commit overhead.
      */
     suspend fun syncGalleryWithDatabase() = withContext(Dispatchers.IO) {
 
@@ -263,7 +299,9 @@ class PhotoRepository @Inject constructor(
         dao.deleteFilepathDuplicates()
 
         // ── Pass 1: directly migrate content:// URIs already stored in the DB ────────
+        // Collect (id, newPath) pairs first so file I/O runs outside the transaction.
         val allDbPhotos = dao.getAllPhotosSnapshot()
+        val pass1Updates = mutableListOf<Pair<Long, String>>()
         for (photo in allDbPhotos) {
             val uri = Uri.parse(photo.filePath)
             if (uri.scheme != "content") continue          // already file:// — skip
@@ -272,8 +310,7 @@ class PhotoRepository @Inject constructor(
                 .also { it.parentFile?.mkdirs() }
 
             if (dest.exists() && dest.length() > 0L) {
-                // Already copied on a previous run — just point the DB row here.
-                dao.updateFilePath(photo.id, dest.absolutePath)
+                pass1Updates.add(Pair(photo.id, dest.absolutePath))
                 continue
             }
 
@@ -282,11 +319,17 @@ class PhotoRepository @Inject constructor(
                     FileOutputStream(dest).use { input.copyTo(it) }
                 }
                 if (dest.exists() && dest.length() > 0L) {
-                    dao.updateFilePath(photo.id, dest.absolutePath)
+                    pass1Updates.add(Pair(photo.id, dest.absolutePath))
                 }
             } catch (_: Exception) {
                 // URI no longer accessible (e.g. fresh reinstall with different UID).
                 // Pass 2 will attempt recovery via the MediaStore query.
+            }
+        }
+        // Apply Pass 1 writes in one transaction (C4)
+        if (pass1Updates.isNotEmpty()) {
+            db.withTransaction {
+                for ((id, path) in pass1Updates) dao.updateFilePath(id, path)
             }
         }
 
@@ -346,6 +389,10 @@ class PhotoRepository @Inject constructor(
             null   // SecurityException if READ_MEDIA_IMAGES denied — skip Pass 2 gracefully
         }
 
+        // Collect all Pass 2 file I/O results before writing to DB (C4)
+        val pass2PathUpdates = mutableListOf<Pair<Long, String>>()   // (id, recoveredPath)
+        val pass2Inserts     = mutableListOf<PhotoEntity>()
+
         cursor?.use { c ->
             val idCol   = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val dateCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
@@ -370,6 +417,7 @@ class PhotoRepository @Inject constructor(
 
                 // For days already in the DB, migrate any photo row that still holds a
                 // stale content:// URI. Only migrate once per day (LIMIT 1 query).
+                // migrateToPrivateStorage handles its own DB write inline (rare path).
                 if (day in existingDays) {
                     val cal = Calendar.getInstance().apply {
                         timeInMillis = dateTaken
@@ -378,10 +426,6 @@ class PhotoRepository @Inject constructor(
                     }
                     val midnight = cal.timeInMillis
                     val tomorrowMidnight = midnight + 24 * 60 * 60 * 1000L
-                    // Only migrate a photo that still has a stale content:// URI.
-                    // Using getPhotoIdForDay (LIMIT 1, no ORDER BY) would make every
-                    // MediaStore entry for a multi-photo day overwrite the same DB record's
-                    // filePath with the last file processed, corrupting the display path.
                     val existingId = dao.getContentUriPhotoIdForDay(midnight, tomorrowMidnight)
                     if (existingId != null) migrateToPrivateStorage(existingId, name, mediaUri)
                 }
@@ -390,12 +434,12 @@ class PhotoRepository @Inject constructor(
                 if (name in existingFilenames) continue
 
                 // DB row exists but private file was lost (e.g. reinstall wiped filesDir).
-                // Re-copy from MediaStore and UPDATE the existing row; never insert a duplicate.
+                // Re-copy from MediaStore and collect UPDATE; never insert a duplicate.
                 val missingEntity = missingByFilename[name]
                 if (missingEntity != null) {
                     val recovered = copyMediaUriToPrivateStorage(name, mediaUri)
                     if (recovered != null) {
-                        dao.updateFilePath(missingEntity.id, recovered.absolutePath)
+                        pass2PathUpdates.add(Pair(missingEntity.id, recovered.absolutePath))
                         existingFilenames.add(name)
                         existingTimestamps.add(missingEntity.dateTaken)
                         existingSeconds.add(missingEntity.dateTaken / 1000)
@@ -410,7 +454,7 @@ class PhotoRepository @Inject constructor(
                 // Genuinely new photo — recover it (fresh reinstall, or first sync).
                 val privateFile = copyMediaUriToPrivateStorage(name, mediaUri)
                 val color = colorForDay(dateTaken)
-                dao.insert(
+                pass2Inserts.add(
                     PhotoEntity(
                         filePath = privateFile?.absolutePath ?: mediaUri.toString(),
                         colorName = color.name,
@@ -427,19 +471,35 @@ class PhotoRepository @Inject constructor(
                 existingDays.add(day)
             }
         }
+
+        // Apply all Pass 2 DB writes in one transaction (C4)
+        if (pass2PathUpdates.isNotEmpty() || pass2Inserts.isNotEmpty()) {
+            db.withTransaction {
+                for ((id, path) in pass2PathUpdates) dao.updateFilePath(id, path)
+                for (entity in pass2Inserts) dao.insert(entity)
+            }
+        }
     }
 
-    /** Rotates a photo 90° clockwise in place on disk. No-op for non-file paths. */
+    /**
+     * Rotates a photo 90° clockwise by updating the EXIF orientation tag in place —
+     * no pixel re-encoding, no generation loss, no OOM risk (C2). Coil 2.x respects
+     * the EXIF orientation tag when loading from file paths.
+     */
     suspend fun rotatePhoto(photo: PhotoEntity) = withContext(Dispatchers.IO) {
         if (!photo.filePath.startsWith("/")) return@withContext
         try {
-            val file = File(photo.filePath)
-            val original = BitmapFactory.decodeFile(file.absolutePath) ?: return@withContext
-            val matrix = Matrix().apply { postRotate(90f) }
-            val rotated = Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
-            original.recycle()
-            FileOutputStream(file).use { rotated.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-            rotated.recycle()
+            val exif = ExifInterface(photo.filePath)
+            val current = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            val next = when (current) {
+                ExifInterface.ORIENTATION_NORMAL     -> ExifInterface.ORIENTATION_ROTATE_90
+                ExifInterface.ORIENTATION_ROTATE_90  -> ExifInterface.ORIENTATION_ROTATE_180
+                ExifInterface.ORIENTATION_ROTATE_180 -> ExifInterface.ORIENTATION_ROTATE_270
+                ExifInterface.ORIENTATION_ROTATE_270 -> ExifInterface.ORIENTATION_NORMAL
+                else                                 -> ExifInterface.ORIENTATION_ROTATE_90
+            }
+            exif.setAttribute(ExifInterface.TAG_ORIENTATION, next.toString())
+            exif.saveAttributes()
         } catch (_: Exception) { }
     }
 
@@ -449,6 +509,8 @@ class PhotoRepository @Inject constructor(
         // previous install after a reinstall), syncGalleryWithDatabase() would otherwise
         // re-import the photo on the next launch — the A2 "resurrection" bug.
         DeletionTombstones.record(context, resolveFilename(photo.filePath), photo.dateTaken)
+        // Clear the backfill-attempted marker so a re-import gets a fresh GPS attempt (C1).
+        clearBackfillAttempted(photo.id)
         try {
             val path = photo.filePath
             when {
@@ -497,6 +559,35 @@ class PhotoRepository @Inject constructor(
                 arrayOf(filename)
             )
         } catch (_: Exception) {}
+    }
+
+    // ── C1: per-photo backfill-attempted markers ─────────────────────────────
+    // Stored in "app_prefs" SharedPreferences alongside tombstones. After a photo
+    // is attempted for GPS backfill (whether GPS was found or not) its ID is added
+    // here so the full MediaStore EXIF scan is skipped on subsequent Gallery opens.
+
+    private fun getAttemptedBackfillIds(): Set<Long> {
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        return prefs.getStringSet("backfill_attempted_ids", emptySet())
+            ?.mapNotNull { it.toLongOrNull() }?.toHashSet() ?: emptySet()
+    }
+
+    private fun markBackfillAttempted(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val existing = HashSet(prefs.getStringSet("backfill_attempted_ids", emptySet()) ?: emptySet())
+        existing.addAll(ids.map { it.toString() })
+        prefs.edit().putStringSet("backfill_attempted_ids", existing).apply()
+    }
+
+    private fun clearBackfillAttempted(id: Long) {
+        val key = id.toString()
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getStringSet("backfill_attempted_ids", null) ?: return
+        if (key !in existing) return
+        prefs.edit()
+            .putStringSet("backfill_attempted_ids", HashSet(existing).apply { remove(key) })
+            .apply()
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
@@ -654,9 +745,20 @@ class PhotoRepository @Inject constructor(
             else Pair(null, null)
         } ?: Pair(null, null)
 
+    /**
+     * Decodes a bitmap from a URI at reduced resolution to avoid OOM on high-MP imports (C2).
+     * Uses a two-pass BitmapFactory approach: first read dimensions only, then decode at
+     * the appropriate inSampleSize to cap the result at 4096×4096 px — sufficient for
+     * color classification and private-storage saves.
+     */
     private fun decodeBitmapFromUri(uri: Uri): Bitmap? = try {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+        opts.inSampleSize = calculateInSampleSize(opts.outWidth, opts.outHeight, 4096, 4096)
+        opts.inJustDecodeBounds = false
+
         var bmp = context.contentResolver.openInputStream(uri)
-            ?.use { BitmapFactory.decodeStream(it) } ?: return null
+            ?.use { BitmapFactory.decodeStream(it, null, opts) } ?: return null
         val rotation = try {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 val exif = ExifInterface(stream)
@@ -677,11 +779,39 @@ class PhotoRepository @Inject constructor(
         bmp
     } catch (_: Exception) { null }
 
+    /** Returns the largest power-of-2 inSampleSize that keeps the decoded image within maxW×maxH. */
+    private fun calculateInSampleSize(width: Int, height: Int, maxWidth: Int, maxHeight: Int): Int {
+        var inSampleSize = 1
+        if (height > maxHeight || width > maxWidth) {
+            val halfHeight = height / 2
+            val halfWidth  = width / 2
+            while (halfHeight / inSampleSize >= maxHeight && halfWidth / inSampleSize >= maxWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
+
     private fun isToday(epochMillis: Long): Boolean {
-        val p = Calendar.getInstance().apply { timeInMillis = epochMillis }
-        val t = Calendar.getInstance()
-        return p.get(Calendar.YEAR) == t.get(Calendar.YEAR) &&
-                p.get(Calendar.DAY_OF_YEAR) == t.get(Calendar.DAY_OF_YEAR)
+        // A strict calendar-day comparison fails for two real-world cases:
+        //  (1) Travel: photo taken at 11pm in timezone A; by the time the user
+        //      imports it the phone is in timezone B where that same moment is
+        //      already "yesterday".
+        //  (2) OEM MediaStore oddities: some manufacturers store DATE_TAKEN as
+        //      local-naive millis (dropping the UTC offset), shifting timestamps
+        //      by the device's UTC offset (up to ±14 h).
+        // A ±4 h grace window around local midnight covers case (1) for most
+        // flight-length timezone changes and is generous enough for case (2) on
+        // typical UTC+/-12 devices while still blocking clearly wrong-day imports.
+        val GRACE_MS = 4L * 60 * 60 * 1000 // 4 hours
+        val todayStart = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val todayEnd = todayStart + 24L * 60 * 60 * 1000
+        return epochMillis in (todayStart - GRACE_MS) until (todayEnd + GRACE_MS)
     }
 
     /**

@@ -5,6 +5,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.21.0] - 2026-06-21
+
+Performance: import OOM protection, lossless photo rotation, stale stats, and sync transaction batching.
+
+### Fixed
+- **Importing a high-megapixel photo could cause OOM** — `decodeBitmapFromUri()` decoded the full source image with no downsampling. A 50 MP photo from a modern camera produces a 200–400 MB raw `ARGB_8888` bitmap, exceeding the heap limit on many devices and causing an OOM crash during import. A two-pass `BitmapFactory` approach now reads dimensions first (`inJustDecodeBounds`), computes the largest power-of-2 `inSampleSize` that keeps the decode within 4096×4096 px, then decodes at that reduced size — sufficient for both color classification and private-storage saves.
+- **Photo rotation re-encoded JPEG pixels on every tap, accumulating quality loss** — `rotatePhoto()` decoded the full JPEG to a raw `Bitmap`, applied a 90° rotation matrix, and re-compressed at quality 95. Repeated rotations degraded sharpness and consumed 20–40 MB of heap per tap. Rotation now updates the EXIF orientation tag in place via `ExifInterface.saveAttributes()` with no pixel decode or re-encode. Coil 2.x applies the EXIF orientation automatically when loading, so the displayed image is always correct.
+- **Bitmap from camera capture and gallery import was never recycled** — the caller-provided `Bitmap` passed to `savePhoto()` and the one decoded inside `importPhoto()` were compressed (to private storage and/or MediaStore) but never recycled. On rapid captures or imports on low-RAM devices the unreleased native memory could accumulate until GC ran, increasing OOM risk. `bitmap.recycle()` is now called after every code path (validation failure, storage error, and success) in both functions.
+- **`backfillLocationData` re-scanned all ColorWalk MediaStore EXIF on every Gallery open** — if any photo permanently lacked GPS coordinates (common for photo-picker imports and pre-fix captures), `missing` was never empty, so the full MediaStore query and per-file EXIF stream-open ran on every `GalleryViewModel` init. Per-photo "attempted" markers are now persisted in `app_prefs` SharedPreferences. After a photo's GPS backfill is attempted (whether coordinates were found or not), subsequent Gallery opens skip it entirely. The MediaStore scan only fires when there are genuinely un-attempted missing photos.
+
+### Changed
+- **`syncGalleryWithDatabase` and `backfillLocationData` now batch DB writes in single transactions** — individual `dao.insert()` / `dao.updateFilePath()` / `dao.updateLocation()` calls inside loops each committed a separate transaction, causing many small journal flushes. All writes in each pass are now collected (with file I/O still running outside the transaction) and applied in a single `db.withTransaction {}` block, reducing commit overhead at the cost of no behavioral change.
+- **versionCode** bumped from 16 → 17; **versionName** from 1.20.0 → 1.21.0.
+
+### Tests
+- 173 JVM unit tests — no new tests added (C-section fixes are in `PhotoRepository` which requires Android instrumented tests for full coverage; C1/C2/C3/C4 are covered by the existing integration test suite and device testing).
+
+---
+
+## [1.20.0] - 2026-06-21
+
+Camera reliability, import tolerance, and zoom accuracy fixes.
+
+### Fixed
+- **Camera capture error gave no user feedback** — when the camera HAL returned an error (out of storage, hardware failure), `onError()` only logged to Logcat and the shutter button silently re-appeared with no indication anything went wrong. The shutter now transitions immediately to a Processing state on tap (so the spinner shows while the camera capture is in flight), and any hardware error sets the same "Error — Something went wrong / Try Again" result card as a storage failure.
+- **Importing a travel-day photo showed "Wrong Day"** — `isToday()` used strict calendar-day equality in the current device timezone, so a photo taken at 11 pm in the departure timezone (still "today" where you were) could map to "yesterday" in the arrival timezone and be rejected. Some OEM devices also store `DATE_TAKEN` as local-naive milliseconds without a UTC offset, shifting the timestamp by the full UTC offset (up to ±14 h). A ±4-hour grace window around local midnight now accepts both cases while still blocking clearly wrong-day imports (photos from two days ago, etc.).
+- **Zoom chip highlighted the wrong level when the camera couldn't reach the requested ratio** — tapping "20×" on a device whose camera tops out at 8× highlighted the 20× chip while displaying 8× footage. Similarly ".5×" stayed highlighted on devices without an ultra-wide lens where the minimum zoom is 1×. The chip list is now filtered to only show levels the active camera physically supports (`minZoomRatio`–`maxZoomRatio` from `cameraInfo.zoomState`). The applied zoom is read back after clamping and written to the highlighted-chip state so the UI always mirrors the hardware.
+
+### Changed
+- **versionCode** bumped from 15 → 16; **versionName** from 1.19.0 → 1.20.0.
+
+### Tests
+- 173 JVM unit tests (was 170): `startCapture_setsProcessingState`, `onCaptureError_setsStorageErrorState`, `onCaptureError_fromProcessing_setsStorageError`.
+
+---
+
+## [1.19.0] - 2026-06-21
+
+Photo viewer stability fix and live stats.
+
+### Fixed
+- **Photo viewer went black after deleting the last-page photo** — when viewing a photo that was not the first in the pager (e.g. page 4 of 5) and deleting it, the pager's internal page position stayed at the old out-of-bounds index for one recomposition frame before settling. During that frame, `photos.getOrNull(currentPage)` returned null and the composable returned early, hiding the Close button, zoom controls, and metadata panel entirely. On slower devices the black screen could persist. The index is now clamped to `lastIndex` immediately so the previous photo is shown without interruption, and a `LaunchedEffect` snaps the pager to the correct page once the list updates.
+- **Stats screen showed stale data after capturing a photo** — `StatsViewModel` loaded all stats once on construction via a one-shot `getAllPhotosSnapshot()` call and never re-queried. Navigating to the camera, capturing a photo, and returning to Stats still showed the streak, photo count, and active-days count from before the capture — undermining trust in the core gamification loop. The ViewModel now subscribes to a live `getAllPhotos()` Room Flow via `collectLatest`; stats recompute automatically whenever a photo is added or deleted.
+
+### Changed
+- **versionCode** bumped from 14 → 15; **versionName** from 1.18.0 → 1.19.0.
+
+### Tests
+- All 170 JVM unit tests updated: `StatsViewModelTest` mocks replaced from `coEvery { getAllPhotosSnapshot() }` to `every { getAllPhotos() } returns flowOf(...)` to match the live-Flow implementation.
+
+---
+
 ## [1.18.0] - 2026-06-21
 
 Color classifier accuracy overhaul — four systemic misclassification bugs fixed.

@@ -51,6 +51,14 @@ class CameraViewModel @Inject constructor(
     private val _captureState = MutableStateFlow<CaptureState>(CaptureState.Idle)
     val captureState: StateFlow<CaptureState> = _captureState
 
+    fun startCapture() {
+        _captureState.value = CaptureState.Processing
+    }
+
+    fun onCaptureError() {
+        _captureState.value = CaptureState.StorageError
+    }
+
     fun onPhotoCaptured(bitmap: Bitmap) {
         _captureState.value = CaptureState.Processing
         val color = _targetColor.value

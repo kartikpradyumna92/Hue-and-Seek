@@ -8,6 +8,7 @@ import com.colorwalk.app.domain.StreakCalculator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -31,34 +32,33 @@ class StatsViewModel @Inject constructor(
     private val _state = MutableStateFlow(StatsUiState())
     val state: StateFlow<StatsUiState> = _state
 
-    init { load() }
-
-    fun load() {
+    init {
         viewModelScope.launch {
-            val allPhotos = repo.getAllPhotosSnapshot()
-            val timestamps = allPhotos.map { it.dateTaken }
-            val currentStreak = repo.getStreak()
-            val bestStreak = computeBestStreak(timestamps)
-            val totalActiveDays = timestamps
-                .map { StreakCalculator.epochMillisToDayIndex(it) }
-                .distinct().size
-            val favEntry = allPhotos
-                .groupBy { it.colorName }
-                .maxByOrNull { it.value.size }
-            // Sort descending so first() per day is the most recent photo
-            val photosByDayIndex = allPhotos
-                .sortedByDescending { it.dateTaken }
-                .groupBy { StreakCalculator.epochMillisToDayIndex(it.dateTaken) }
+            repo.getAllPhotos().collectLatest { allPhotos ->
+                val timestamps = allPhotos.map { it.dateTaken }
+                val currentStreak = repo.getStreak()
+                val bestStreak = computeBestStreak(timestamps)
+                val totalActiveDays = timestamps
+                    .map { StreakCalculator.epochMillisToDayIndex(it) }
+                    .distinct().size
+                val favEntry = allPhotos
+                    .groupBy { it.colorName }
+                    .maxByOrNull { it.value.size }
+                // Sort descending so first() per day is the most recent photo
+                val photosByDayIndex = allPhotos
+                    .sortedByDescending { it.dateTaken }
+                    .groupBy { StreakCalculator.epochMillisToDayIndex(it.dateTaken) }
 
-            _state.value = StatsUiState(
-                currentStreak = currentStreak,
-                bestStreak = bestStreak,
-                totalPhotos = allPhotos.size,
-                totalActiveDays = totalActiveDays,
-                favouriteColorName = favEntry?.key,
-                favouriteColorHex = favEntry?.value?.firstOrNull()?.colorHex,
-                photosByDayIndex = photosByDayIndex
-            )
+                _state.value = StatsUiState(
+                    currentStreak = currentStreak,
+                    bestStreak = bestStreak,
+                    totalPhotos = allPhotos.size,
+                    totalActiveDays = totalActiveDays,
+                    favouriteColorName = favEntry?.key,
+                    favouriteColorHex = favEntry?.value?.firstOrNull()?.colorHex,
+                    photosByDayIndex = photosByDayIndex
+                )
+            }
         }
     }
 

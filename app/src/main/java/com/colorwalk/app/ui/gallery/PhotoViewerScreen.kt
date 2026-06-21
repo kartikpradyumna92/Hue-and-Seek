@@ -54,11 +54,22 @@ fun PhotoViewerScreen(
     var scale by remember { mutableStateOf(1f) }
     LaunchedEffect(pagerState.currentPage) { scale = 1f }
 
+    // When a photo is deleted the list shrinks before the pager settles on the new
+    // last page. Snap immediately so currentPage is never out-of-bounds.
+    LaunchedEffect(photos.size) {
+        if (photos.isNotEmpty()) {
+            val clamped = pagerState.currentPage.coerceAtMost(photos.lastIndex)
+            if (pagerState.currentPage != clamped) pagerState.scrollToPage(clamped)
+        }
+    }
+
     // Per-photo revision counter — incremented after each rotation to bust Coil's cache
     val rotationRevisions = remember { mutableStateMapOf<Long, Int>() }
     var isRotating by remember { mutableStateOf(false) }
 
-    val currentPhoto = photos.getOrNull(pagerState.currentPage) ?: return
+    // Guard against the one-recomposition window where currentPage hasn't settled yet.
+    val safeIndex = pagerState.currentPage.coerceAtMost(photos.lastIndex.coerceAtLeast(0))
+    val currentPhoto = photos.getOrNull(safeIndex) ?: return
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     if (showDeleteConfirm) {
