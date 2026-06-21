@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.16.0] - 2026-06-21
+
+Color validation accuracy fix.
+
+### Fixed
+- **Gray / neutral scenes falsely reported a color as "Dominant"** — under warm indoor lighting, a tiny fraction (2–4%) of gray pixels pick up a slight warm tint and slip past the saturation gate, just enough for one color bucket to "win" with near-zero real pixels. The result card then showed e.g. "Red Dominated" on a scene that had no visible red at all (screenshot: gray rug). A color must now hold ≥5% of the center-weighted frame to be named as dominant; below that threshold the card correctly says "Neutral tones".
+- **Failure card gave no hint when an adjacent color was found** — on a Red day, pointing at a vivid fuchsia/pink sign correctly failed (the sign is Pink, not Red), but the card only said "1% Red — Blue dominated" with no clue that 12%+ Pink was present. The failure card now shows a tip line: "Tip: N% Pink was found — try something more purely Red." This applies to any color mismatch where a non-target color is dominant.
+
+### Changed
+- **versionCode** bumped from 11 → 12; **versionName** from 1.15.0 → 1.16.0.
+
+### Tests
+- 162 JVM unit tests (was 159): new tests for the MIN_DOMINANT_SHARE gate (neutral vs. named dominant at the threshold boundary) and for the nearest-color hint field.
+
+---
+
 ## [1.15.0] - 2026-06-12
 
 Reliability release: reminder alarms, backup/restore, and capture responsiveness.

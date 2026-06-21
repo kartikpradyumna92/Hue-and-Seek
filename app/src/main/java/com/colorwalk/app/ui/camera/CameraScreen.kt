@@ -556,6 +556,18 @@ private fun ResultCard(
                         color = Color.White.copy(alpha = 0.7f),
                         textAlign = TextAlign.Center
                     )
+                    // Hint when a nearby color (e.g. Pink on a Red day) was found —
+                    // helps the user understand what the camera actually detected.
+                    if (!targetLeads && state.nearestColorName != null) {
+                        val nearPct = (state.nearestColorShare * 100).toInt()
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Tip: ${nearPct}% ${state.nearestColorName} was found — try something more purely $targetColorName.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.55f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
                     Spacer(Modifier.height(16.dp))
                     OutlinedButton(onClick = onDismiss) {
                         Text("Try Again", color = Color.White, style = MaterialTheme.typography.labelLarge)

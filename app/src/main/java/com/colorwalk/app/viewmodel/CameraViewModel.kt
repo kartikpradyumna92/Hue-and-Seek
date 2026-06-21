@@ -22,7 +22,13 @@ sealed class CaptureState {
     object Idle : CaptureState()
     object Processing : CaptureState()
     data class Success(val dominantHex: String) : CaptureState()
-    data class Failed(val matchPercent: Float, val targetColorName: String, val actualDominant: String) : CaptureState()
+    data class Failed(
+        val matchPercent: Float,
+        val targetColorName: String,
+        val actualDominant: String,
+        val nearestColorName: String? = null,  // highest non-target color found (for hint)
+        val nearestColorShare: Float = 0f
+    ) : CaptureState()
     object StorageError : CaptureState()
     // Import-specific failures
     object ImportNoDate : CaptureState()
@@ -51,7 +57,12 @@ class CameraViewModel @Inject constructor(
         viewModelScope.launch {
             _captureState.value = when (val result = repo.savePhoto(bitmap, color)) {
                 is SaveResult.Success          -> CaptureState.Success(result.validation.dominantHex)
-                is SaveResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, color.name, result.validation.actualDominantColor)
+                is SaveResult.ValidationFailed -> CaptureState.Failed(
+                    result.validation.matchPercent, color.name,
+                    result.validation.actualDominantColor,
+                    result.validation.nearestColorName,
+                    result.validation.nearestColorShare
+                )
                 SaveResult.StorageError        -> CaptureState.StorageError
             }
         }
@@ -63,7 +74,12 @@ class CameraViewModel @Inject constructor(
         viewModelScope.launch {
             _captureState.value = when (val result = repo.importPhoto(uri, color)) {
                 is ImportResult.Success          -> CaptureState.Success(result.validation.dominantHex)
-                is ImportResult.ValidationFailed -> CaptureState.Failed(result.validation.matchPercent, color.name, result.validation.actualDominantColor)
+                is ImportResult.ValidationFailed -> CaptureState.Failed(
+                    result.validation.matchPercent, color.name,
+                    result.validation.actualDominantColor,
+                    result.validation.nearestColorName,
+                    result.validation.nearestColorShare
+                )
                 ImportResult.NoDateMetadata      -> CaptureState.ImportNoDate
                 is ImportResult.NotTakenToday    -> CaptureState.ImportWrongDay(result.dateTaken)
                 ImportResult.AlreadyImported     -> CaptureState.ImportDuplicate

@@ -30,13 +30,24 @@ object ColorValidator {
         val dominantHex: String,
         val dominantName: String,
         val matchPercent: Float,         // target's weighted share of the WHOLE frame (0..1)
-        val actualDominantColor: String  // walk color with the highest count, or NEUTRAL_LABEL
+        val actualDominantColor: String, // walk color with the highest count (≥MIN_DOMINANT_SHARE), or NEUTRAL_LABEL
+        val nearestColorName: String? = null,  // highest non-target color present (for failure hints)
+        val nearestColorShare: Float = 0f      // its share of the total weighted frame
     )
 
     private const val SAMPLE_SIZE = 80
 
     /** Target must cover at least this fraction of the (center-weighted) frame to pass. */
     internal const val MIN_TARGET_SHARE = 0.15f
+
+    /**
+     * A color must hold at least this fraction of the total weighted frame to be
+     * reported as the "dominant" color in a result card. Below this threshold the
+     * scene is essentially neutral (e.g. a gray rug under warm lighting where 2–3%
+     * of pixels happen to be slightly reddish) and "Neutral tones" is shown instead
+     * of a misleading color name.
+     */
+    internal const val MIN_DOMINANT_SHARE = 0.05f
 
     // Neutral gates — pixels below these are shadow/gray/white and belong to no color.
     private const val MIN_VALUE = 0.15f
@@ -108,7 +119,13 @@ object ColorValidator {
                 targetWeight == maxWeight &&
                 targetShare >= MIN_TARGET_SHARE
 
-        val dominantIdx = if (maxWeight > 0) weights.indexOfFirst { it == maxWeight } else -1
+        // A color must hold at least MIN_DOMINANT_SHARE of the total weighted frame
+        // to be named "dominant". Without this gate, 2–3% of warm-tinted neutral
+        // pixels (e.g. a gray rug under incandescent light) falsely claim dominance.
+        val dominantShare = if (totalWeight > 0) maxWeight.toFloat() / totalWeight else 0f
+        val dominantIdx = if (maxWeight > 0 && dominantShare >= MIN_DOMINANT_SHARE)
+            weights.indexOfFirst { it == maxWeight } else -1
+
         val dominantName: String
         val dominantHex: String
         if (dominantIdx >= 0) {
@@ -125,12 +142,24 @@ object ColorValidator {
             dominantHex = "#808080"
         }
 
+        // Find the highest non-target color so failure cards can hint what WAS found
+        // (e.g. "12% Pink found" when a fuchsia sign is shot on a Red day).
+        var nearestName: String? = null
+        var nearestShare = 0f
+        for (i in weights.indices) {
+            if (i == targetIdx) continue
+            val share = if (totalWeight > 0) weights[i].toFloat() / totalWeight else 0f
+            if (share > nearestShare) { nearestShare = share; nearestName = WALK_COLORS[i].name }
+        }
+
         return ValidationResult(
             passed = passed,
             dominantHex = dominantHex,
             dominantName = dominantName,
             matchPercent = targetShare,
-            actualDominantColor = dominantName
+            actualDominantColor = dominantName,
+            nearestColorName = if (nearestShare >= MIN_DOMINANT_SHARE) nearestName else null,
+            nearestColorShare = nearestShare
         )
     }
 

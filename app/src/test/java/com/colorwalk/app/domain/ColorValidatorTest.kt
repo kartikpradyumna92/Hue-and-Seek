@@ -151,15 +151,47 @@ class ColorValidatorTest {
     }
 
     @Test
-    fun validatePixels_tinyColorSpeckInGrayScene_failsDespiteBeingTopColor() {
-        // 3 red pixels in a corner of an otherwise gray frame: red is the top
-        // classified color but far below MIN_TARGET_SHARE — the color must POP.
+    fun validatePixels_tinyColorSpeckInGrayScene_failsAndShowsNeutralDominant() {
+        // 3 red pixels in a corner of an otherwise gray (neutral) 10×10 frame.
+        // Red's weighted share ≈ 2.2% < MIN_DOMINANT_SHARE (5%), so the result
+        // must display "Neutral tones" rather than falsely claiming "Red dominated"
+        // (the real-world bug: a gray rug under warm light showed "Red dominated").
         val pixels = frame(10, 10, GRAY)
         pixels[0] = PURE_RED; pixels[1] = PURE_RED; pixels[2] = PURE_RED
         val result = ColorValidator.validatePixels(pixels, 10, 10, walkColor("Red"))
         assertFalse(result.passed)
-        assertEquals("Red", result.actualDominantColor)   // it leads…
-        assertTrue(result.matchPercent < ColorValidator.MIN_TARGET_SHARE) // …but doesn't pop
+        assertEquals(ColorValidator.NEUTRAL_LABEL, result.actualDominantColor)
+        assertTrue(result.matchPercent < ColorValidator.MIN_TARGET_SHARE)
+    }
+
+    @Test
+    fun validatePixels_colorAboveDominantThreshold_showsColorNotNeutral() {
+        // 10×10 frame: totalWeight = 125 (center 5×5 at weight 2, outer 75 at weight 1).
+        // 8 edge pixels (weight 1 each) → share = 8/125 = 6.4% > MIN_DOMINANT_SHARE (5%):
+        // the dominant label should name the color, not "Neutral tones".
+        val pixels = frame(10, 10, GRAY)
+        for (i in 0 until 8) pixels[i] = PURE_RED
+        val result = ColorValidator.validatePixels(pixels, 10, 10, walkColor("Red"))
+        assertFalse(result.passed) // still far below MIN_TARGET_SHARE (15%)
+        assertEquals("Red", result.actualDominantColor)
+    }
+
+    @Test
+    fun validatePixels_nearestColorHint_exposesHighestNonTargetColor() {
+        // 30% green, 10% red frame on a Red day: Red fails (not dominant), and
+        // the nearest-color hint should point to Green so the UI can tell the user
+        // "30% Green was found — try something more purely Red."
+        val pixels = IntArray(100) { i ->
+            when {
+                i < 30 -> GRASS_GREEN
+                i < 40 -> PURE_RED
+                else   -> GRAY
+            }
+        }
+        val result = ColorValidator.validatePixels(pixels, 10, 10, walkColor("Red"))
+        assertFalse(result.passed)
+        assertEquals("Green", result.nearestColorName)
+        assertTrue(result.nearestColorShare > 0.2f)
     }
 
     @Test
