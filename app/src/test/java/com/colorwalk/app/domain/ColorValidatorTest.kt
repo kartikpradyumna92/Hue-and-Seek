@@ -33,14 +33,24 @@ class ColorValidatorTest {
     private val SADDLE_BROWN = rgb(139, 69, 19)    // classic brown (h≈25, v≈0.55)
     private val TAN          = rgb(210, 180, 140)  // light muted brown (h≈34, s≈0.33, v≈0.82)
     private val BRIGHT_ORANGE = rgb(251, 140, 0)   // #FB8C00 — the app's Orange swatch
-    private val LIGHT_PINK   = rgb(244, 194, 194)  // washed-out red hue → reads pink
+    private val LIGHT_PINK   = rgb(255, 185, 185)  // pale pink (s≈0.27) → reads pink; old pixel s≈0.20 is now neutral
     private val MAGENTA_PINK = rgb(233, 30, 99)    // #E91E63 — the app's Pink swatch
     private val GRASS_GREEN  = rgb(67, 160, 71)    // #43A047 — the app's Green swatch
     private val SKY_CYAN     = rgb(135, 206, 235)  // sky blue, h≈197 (old algorithm's gap)
     private val DEEP_BLUE    = rgb(30, 136, 229)   // #1E88E5 — the app's Blue swatch
-    private val GRAY         = rgb(128, 128, 128)
-    private val NEAR_BLACK   = rgb(20, 20, 20)
-    private val WHITE        = rgb(250, 250, 250)
+    private val GRAY              = rgb(128, 128, 128)
+    private val NEAR_BLACK        = rgb(20, 20, 20)
+    private val WHITE             = rgb(250, 250, 250)
+    // Earth tone (Orange hue, h≈19°): muted orange chroma≈0.45 ≤ 0.50 → Brown via Orange path
+    private val SIENNA            = rgb(160, 82, 45)
+    // Earth tone (Red hue, h≈9°): brick-like chroma≈0.50 in 0.35–0.60 window → Brown via Red path
+    private val BRICK_RED         = rgb(178, 70, 50)
+    // Earth tone (Red hue, h≈10°): terracotta chroma≈0.59 in 0.35–0.60 window → Brown via Red path
+    private val TERRACOTTA        = rgb(204, 78, 53)
+    // Medium-bright washed-out red: h≈7°, s≈0.24, chroma≈0.18 < 0.35 → Pink (not Brown)
+    private val DUSTY_ROSE        = rgb(185, 145, 140)
+    // Warm-tinted gray (incandescent light): s≈0.20 — between old 0.18 and new 0.22 thresholds
+    private val WARM_GRAY         = rgb(185, 165, 150)
 
     // ── per-pixel classification (replaces the old order-dependent matching) ──
 
@@ -104,6 +114,52 @@ class ColorValidatorTest {
         assertNull(ColorValidator.classify(GRAY))
         assertNull(ColorValidator.classify(NEAR_BLACK))
         assertNull(ColorValidator.classify(WHITE))
+    }
+
+    @Test
+    fun classify_warmTintedGray_isNeutral() {
+        // A gray wall under warm incandescent light shifts to s≈0.19 at h≈26°.
+        // Old MIN_SATURATION=0.18 let it classify as Brown, polluting the histogram
+        // on any non-Brown day (e.g. a mostly gray indoor room on Green day showed
+        // "Brown Dominated"). New MIN_SATURATION=0.22 correctly rejects it.
+        assertNull(ColorValidator.classify(WARM_GRAY))
+    }
+
+    @Test
+    fun classify_sienna_isBrown_notOrange() {
+        // h≈19°, s≈0.72, v≈0.63 — chroma=0.45 ≤ 0.50 → Brown via Orange/Brown path.
+        assertEquals("Brown", ColorValidator.classify(SIENNA)?.name)
+    }
+
+    @Test
+    fun classify_brick_isBrown_notRed() {
+        // h≈9°, s≈0.72, v≈0.70, chroma≈0.50 — in the 0.35–0.60 window for Red-hue earth tones.
+        // Old code classified every h<15° pixel as Red/Pink regardless of chroma, so a
+        // brick wall on a Brown day would return "Red Dominated" and never pass.
+        assertEquals("Brown", ColorValidator.classify(BRICK_RED)?.name)
+    }
+
+    @Test
+    fun classify_terracotta_isBrown_notRed() {
+        // h≈10°, s≈0.74, v≈0.80, chroma≈0.59 — just under the 0.60 upper bound.
+        assertEquals("Brown", ColorValidator.classify(TERRACOTTA)?.name)
+    }
+
+    @Test
+    fun classify_dustyRose_isPink_notRed_andNotBrown() {
+        // h≈7°, s≈0.24, chroma≈0.18 — below the Brown lower bound (0.35), so it falls
+        // through to the Pink branch (s<0.40, v≥0.55). Must not be misclassified as Brown.
+        assertEquals("Pink", ColorValidator.classify(DUSTY_ROSE)?.name)
+    }
+
+    @Test
+    fun validatePixels_terracottaSubject_passesOnBrownDay() {
+        // A terracotta-filled frame (flower pots, terracotta tiles, adobe walls) on a Brown day.
+        // Before the fix, every pixel classified as Red → "Red Dominated", never passing Brown.
+        val pixels = IntArray(64) { TERRACOTTA }
+        val result = ColorValidator.validatePixels(pixels, 8, 8, walkColor("Brown"))
+        assertTrue("Terracotta subject must pass on a Brown day", result.passed)
+        assertEquals("Brown", result.actualDominantColor)
     }
 
     @Test

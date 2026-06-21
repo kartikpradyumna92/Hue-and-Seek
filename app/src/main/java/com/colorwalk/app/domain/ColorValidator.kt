@@ -50,8 +50,11 @@ object ColorValidator {
     internal const val MIN_DOMINANT_SHARE = 0.05f
 
     // Neutral gates — pixels below these are shadow/gray/white and belong to no color.
+    // MIN_SATURATION = 0.22: prevents warm-tinted near-neutral surfaces (gray walls/rugs
+    // under incandescent light, s≈0.19-0.21) from polluting Orange/Brown buckets while
+    // retaining genuinely pastel colors (baby blue s≈0.30, sage green s≈0.35).
     private const val MIN_VALUE = 0.15f
-    private const val MIN_SATURATION = 0.18f
+    private const val MIN_SATURATION = 0.22f
 
     internal const val NEUTRAL_LABEL = "Neutral tones"
 
@@ -172,7 +175,7 @@ object ColorValidator {
     /**
      * Hue bands cover the full wheel so every sufficiently-colorful pixel lands in
      * exactly one bucket:
-     *   Red    345–15   (light + washed-out → Pink)
+     *   Red    345–15   (h≥5° + mid chroma → Brown; washed-out → Pink)
      *   Orange  15–45   (dark or muted → Brown)
      *   Yellow  45–70
      *   Green   70–175
@@ -185,12 +188,26 @@ object ColorValidator {
         val h = hsv[0]; val s = hsv[1]; val v = hsv[2]
         if (v < MIN_VALUE || s < MIN_SATURATION) return null
         return when {
-            h >= 345f || h < 15f ->
-                // Washed-out light reds (rose, blush) read as pink to the eye.
-                if (s < 0.40f && v >= 0.75f) IDX_PINK else IDX_RED
-            h < 45f ->
-                // Brown is dark orange; muted mid-light oranges (tan, wood) also read brown.
-                if (v <= 0.55f || (s <= 0.45f && v <= 0.85f)) IDX_BROWN else IDX_ORANGE
+            h >= 345f || h < 15f -> {
+                val chroma = s * v
+                when {
+                    // Orange-red earth tones (brick, terracotta, rust): hue is offset toward
+                    // orange (h≥5°) and chroma sits in the mid-range of fired clay / mineral
+                    // pigments (0.35–0.60). Pure reds cluster at h<5° (excluded by h≥5f).
+                    // Pale pinks have chroma<0.35 (excluded by the lower bound), so dusty
+                    // rose / blush reach the Pink branch below rather than landing here.
+                    h >= 5f && chroma in 0.35f..0.60f -> IDX_BROWN
+                    // Washed-out light reds (dusty rose, blush) at medium-to-high brightness
+                    s < 0.40f && v >= 0.55f -> IDX_PINK
+                    else -> IDX_RED
+                }
+            }
+            h < 45f -> {
+                // Brown is "dark/muted orange". Chroma (s×v) is the best single discriminator:
+                // vibrant oranges have chroma≥0.50; earth tones (sienna, wood, tan) are below.
+                val chroma = s * v
+                if (v <= 0.65f || chroma <= 0.50f) IDX_BROWN else IDX_ORANGE
+            }
             h < 70f  -> IDX_YELLOW
             h < 175f -> IDX_GREEN
             h < 260f -> IDX_BLUE

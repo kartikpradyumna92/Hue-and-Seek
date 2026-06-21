@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.18.0] - 2026-06-21
+
+Color classifier accuracy overhaul — four systemic misclassification bugs fixed.
+
+### Fixed
+- **Warm-lit near-neutral surfaces polluted non-Orange days** — gray walls, rugs, and tiles under incandescent light develop a slight warm tint (s≈0.19–0.21) that slipped past the old saturation gate (0.18). On a Green or Blue day in an otherwise neutral indoor room, 10–20% of frame pixels could land in the Orange/Brown bucket and trigger "Orange Dominated" even when no orange object was in frame. Raised `MIN_SATURATION` to 0.22; genuinely pastel colors (baby blue s≈0.30, sage green s≈0.35) are unaffected.
+- **Earth-tone oranges (sienna, muted burnt-orange) classified as Orange instead of Brown** — the old boundary (v≤0.55 or s≤0.45) missed medium-dark muted oranges like sienna (s≈0.72, v≈0.63, chroma≈0.45). On a Brown day, shooting a sienna wall or wooden door returned "Orange Dominated" instead of passing. Replaced the two-threshold condition with a chroma-based gate: any orange-hue pixel with `saturation × value ≤ 0.50` or `value ≤ 0.65` now goes to Brown. Bright vibrant oranges (chroma ≥ 0.80) correctly remain Orange.
+- **Medium-brightness washed-out reds classified as Red instead of Pink** — the old Pink detection at the Red hue (345–15°) required both low saturation (s<0.40) AND high brightness (v≥0.75). Dusty rose, blush, and faded-rose tones at v=0.55–0.74 went to Red instead of Pink, making Pink days harder to pass with the most common "pinkish" real-world objects. Lowered the brightness gate to v≥0.55. Dark muted reds (maroon, burgundy, s>0.40 or v<0.55) are unaffected.
+- **Brick and terracotta classified as Red instead of Brown** — brick (h≈9°, chroma≈0.50) and terracotta (h≈10°, chroma≈0.59) both fall within the Red hue band (345–15°). The old code sent every pixel in that band to Red or Pink, making Brown-day photos of brick walls, terracotta pots, and adobe floors always fail. The Red branch now checks first: if `h≥5°` (offset toward orange, away from pure red) **and** chroma is in the 0.35–0.60 range (above pale-pink territory, below vivid-red territory), the pixel is Brown. Pure reds cluster at h<5° and are unaffected; pale pinks have chroma<0.35 and fall through to the existing Pink check.
+
+### Changed
+- **versionCode** bumped from 12 → 14; **versionName** from 1.16.0 → 1.18.0.
+
+### Tests
+- 170 JVM unit tests (was 162): `classify_warmTintedGray_isNeutral`, `classify_sienna_isBrown_notOrange`, `classify_brick_isBrown_notRed`, `classify_terracotta_isBrown_notRed`, `classify_dustyRose_isPink_notRed_andNotBrown`, `validatePixels_terracottaSubject_passesOnBrownDay`. Updated `LIGHT_PINK` test pixel from rgb(244,194,194) to rgb(255,185,185).
+
+---
+
 ## [1.16.0] - 2026-06-21
 
 Color validation accuracy fix.
