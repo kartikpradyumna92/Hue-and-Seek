@@ -8,7 +8,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.location.Address
 import android.location.Geocoder
-import android.media.ExifInterface
+import androidx.exifinterface.media.ExifInterface
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -64,10 +64,6 @@ class PhotoRepository @Inject constructor(
         dao.getAllPhotosSnapshot()
     }
 
-    suspend fun getFavouriteColor(): ColorSummary? = withContext(Dispatchers.IO) {
-        dao.getFavouriteColor()
-    }
-
     /**
      * One-time backfill: for every DB row with null lat/lon, find the corresponding
      * MediaStore entry by filename and read its GPS EXIF (written at capture time by
@@ -98,10 +94,13 @@ class PhotoRepository @Inject constructor(
         val locationByFilename = mutableMapOf<String, Pair<Double, Double>>()
         val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME)
         val selection = "${MediaStore.Images.Media.DISPLAY_NAME} LIKE 'ColorWalk_%'"
-        context.contentResolver.query(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            projection, selection, null, null
-        )?.use { cursor ->
+        val backfillCursor = try {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection, selection, null, null
+            )
+        } catch (_: Exception) { null }   // SecurityException if READ_MEDIA_IMAGES denied — skip gracefully
+        backfillCursor?.use { cursor ->
             val idCol   = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             while (cursor.moveToNext()) {
@@ -170,13 +169,8 @@ class PhotoRepository @Inject constructor(
     }
 
     suspend fun hasCapturedToday(): Boolean = withContext(Dispatchers.IO) {
-        val cal = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }
-        val midnight = cal.timeInMillis
-        cal.add(Calendar.DAY_OF_MONTH, 1)
-        val tomorrowMidnight = cal.timeInMillis
+        val midnight = StreakCalculator.todayMidnightMs()
+        val tomorrowMidnight = midnight + 24L * 60 * 60 * 1000
         dao.getPhotoForDay(midnight, tomorrowMidnight) != null
     }
 

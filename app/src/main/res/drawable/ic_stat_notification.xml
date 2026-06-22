@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="@android:color/white">
+  <!-- Camera body -->
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M9.5,6.5L10.83,5L13.17,5L14.5,6.5L18,6.5C18.83,6.5 19.5,7.17 19.5,8L19.5,17C19.5,17.83 18.83,18.5 18,18.5L6,18.5C5.17,18.5 4.5,17.83 4.5,17L4.5,8C4.5,7.17 5.17,6.5 6,6.5L9.5,6.5ZM12,9C10.07,9 8.5,10.57 8.5,12.5C8.5,14.43 10.07,16 12,16C13.93,16 15.5,14.43 15.5,12.5C15.5,10.57 13.93,9 12,9ZM12,10.5C13.1,10.5 14,11.4 14,12.5C14,13.6 13.1,14.5 12,14.5C10.9,14.5 10,13.6 10,12.5C10,11.4 10.9,10.5 12,10.5Z"/>
+</vector>

@@ -14,13 +14,18 @@ android {
         applicationId = "com.colorwalk.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "1.21.0"
+        versionCode = 19
+        versionName = "1.23.0"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
     testOptions {
@@ -80,13 +85,12 @@ dependencies {
     implementation(libs.camerax.camera2)
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
-    implementation(libs.camerax.extensions)
+    implementation(libs.exifinterface)
 
     implementation(libs.coil.compose)
     implementation(libs.gms.location)
     implementation(libs.coroutines.android)
     implementation(libs.coroutines.play.services)
-    implementation(libs.datastore)
     implementation(libs.accompanist.permissions)
 implementation(libs.play.review)
     implementation(libs.konfetti.compose)

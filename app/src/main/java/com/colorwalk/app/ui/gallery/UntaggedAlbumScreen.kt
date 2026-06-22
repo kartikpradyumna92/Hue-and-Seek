@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.ui.components.EmptyState
+import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.PhotoGridCard
 import com.colorwalk.app.ui.components.ScreenHeader
 import com.colorwalk.app.ui.components.photoImageRequest
@@ -88,7 +89,7 @@ fun UntaggedAlbumScreen(
                 items(photos, key = { it.id }) { photo ->
                     PhotoGridCard(
                         photo = photo,
-                        accentColor = parseHexColor(photo.colorHex),
+                        accentColor = parseAccentHex(photo.colorHex),
                         onOpen = { viewModel.startTagging(photo) },
                         onDelete = { viewModel.deletePhoto(photo) }
                     )
@@ -142,7 +143,7 @@ private fun TagLocationDialog(
                             photo.colorName,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = parseHexColor(photo.colorHex)
+                            color = parseAccentHex(photo.colorHex)
                         )
                         Text(
                             dateStr,

@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.colorwalk.app.ui.components.EmptyState
+import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.PhotoGridCard
 import com.colorwalk.app.ui.components.ScreenHeader
 import com.colorwalk.app.ui.theme.Spacing
@@ -27,7 +28,7 @@ fun ColorAlbumScreen(
 ) {
     val photos        by viewModel.photosForColor.collectAsState()
     val albumSortOrder by viewModel.albumSortOrder.collectAsState()
-    val accentColor = photos.firstOrNull()?.colorHex?.let { parseHexColor(it) } ?: Color.Gray
+    val accentColor = photos.firstOrNull()?.colorHex?.let { parseAccentHex(it) } ?: Color.Gray
 
     // Auto-pop when the last photo is deleted so the empty album doesn't linger.
     // Guard: only trigger after we've seen at least one photo (avoids popping on initial load).

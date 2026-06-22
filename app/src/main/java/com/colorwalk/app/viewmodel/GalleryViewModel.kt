@@ -10,6 +10,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.Calendar
+import java.util.Locale
 import javax.inject.Inject
 
 enum class GalleryViewMode { COLOR, DATE, PLACE }
@@ -253,16 +254,16 @@ class GalleryViewModel @Inject constructor(
         }
     }
 
-    // Truncate to 1 decimal place (~11 km bucket) so nearby photos with the same
-    // rough coordinates cluster into one place card. Returns null for null island (0,0)
-    // which indicates a bad GPS fix rather than a real location.
+    // Bucket to ~11 km grid. Floor on signed value so bucket boundaries are symmetric
+    // around the equator/prime meridian. Locale.US prevents comma decimal separators
+    // (e.g. German "33,8") in the label which is used as a Map key.
     private fun coordinateLabel(lat: Double?, lon: Double?): String? {
         if (lat == null || lon == null) return null
         if (Math.abs(lat) < 0.001 && Math.abs(lon) < 0.001) return null
-        val latR = Math.floor(Math.abs(lat) * 10) / 10.0
-        val lonR = Math.floor(Math.abs(lon) * 10) / 10.0
+        val latR = Math.floor(lat * 10) / 10.0
+        val lonR = Math.floor(lon * 10) / 10.0
         val latDir = if (lat >= 0) "N" else "S"
         val lonDir = if (lon >= 0) "E" else "W"
-        return "Near %.1f°%s, %.1f°%s".format(latR, latDir, lonR, lonDir)
+        return "Near %.1f°%s, %.1f°%s".format(Locale.US, Math.abs(latR), latDir, Math.abs(lonR), lonDir)
     }
 }

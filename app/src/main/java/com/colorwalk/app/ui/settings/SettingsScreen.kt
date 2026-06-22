@@ -1,11 +1,14 @@
 package com.colorwalk.app.ui.settings
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,6 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.app.NotificationManagerCompat
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.colorwalk.app.domain.WALK_COLORS
 import com.colorwalk.app.notification.AlarmScheduler
 import com.colorwalk.app.notification.NotificationPrefs
@@ -36,6 +43,15 @@ fun SettingsScreen(
 
     var selectedTheme       by remember { mutableStateOf(NotificationPrefs.getThemeMode(context)) }
     var notificationsEnabled by remember { mutableStateOf(NotificationPrefs.isEnabled(context)) }
+
+    // Re-check every time the screen resumes (e.g. after user returns from system settings).
+    var notificationsBlocked by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            notificationsBlocked = !NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
+    }
     var morningEnabled      by remember { mutableStateOf(NotificationPrefs.isMorningEnabled(context)) }
     var eveningEnabled      by remember { mutableStateOf(NotificationPrefs.isEveningEnabled(context)) }
     var morningHour         by remember { mutableIntStateOf(NotificationPrefs.getMorningHour(context)) }
@@ -199,6 +215,55 @@ fun SettingsScreen(
 
                 // ── Notifications ─────────────────────────────────────────────
                 SettingsSectionHeader("Notifications")
+
+                if (notificationsBlocked) {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Notifications blocked",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Text(
+                                    "Reminders won't appear. Tap to enable in system settings.",
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                    color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = {
+                                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                }
+                                context.startActivity(intent)
+                            }) {
+                                Text("Open", color = MaterialTheme.colorScheme.onErrorContainer)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
 
                 Card(
                     shape = RoundedCornerShape(16.dp),

@@ -44,7 +44,7 @@ object NotificationHelper {
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setSmallIcon(R.drawable.ic_stat_notification)
             .setContentTitle("Find $colorName today 🎨")
             .setContentText(nudge)
             .setStyle(NotificationCompat.BigTextStyle()

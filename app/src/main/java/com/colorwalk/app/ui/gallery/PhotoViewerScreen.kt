@@ -1,7 +1,10 @@
 package com.colorwalk.app.ui.gallery
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -12,25 +15,31 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.RotateRight
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.net.Uri
+import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.memory.MemoryCache
-import coil.request.ImageRequest
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.ui.components.parseAccentHex
+import com.colorwalk.app.ui.components.photoImageRequest
 import java.io.File as JavaFile
 import java.text.SimpleDateFormat
 import java.util.*
@@ -50,9 +59,14 @@ fun PhotoViewerScreen(
     // Swiping left → higher page index → older photo (standard photo-app convention).
     val pagerState = rememberPagerState(initialPage = initialIndex) { photos.size }
 
-    // Reset zoom whenever the visible page changes
+    // Reset zoom and pan whenever the visible page changes
     var scale by remember { mutableStateOf(1f) }
-    LaunchedEffect(pagerState.currentPage) { scale = 1f }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    var imageSize by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(pagerState.currentPage) {
+        scale = 1f
+        offset = Offset.Zero
+    }
 
     // When a photo is deleted the list shrinks before the pager settles on the new
     // last page. Snap immediately so currentPage is never out-of-bounds.
@@ -93,12 +107,13 @@ fun PhotoViewerScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Pure pager — NO gesture modifiers on pages so swipe is never intercepted
+        // Pager swipe is disabled while zoomed in so pan gestures don't also flip pages.
         val context = LocalContext.current
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
-            beyondBoundsPageCount = 1
+            beyondBoundsPageCount = 1,
+            userScrollEnabled = scale == 1f
         ) { page ->
             val photo = photos[page]
             val revision = rotationRevisions[photo.id] ?: 0
@@ -106,21 +121,33 @@ fun PhotoViewerScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clipToBounds(),
+                    .clipToBounds()
+                    .onSizeChanged { imageSize = it }
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            scale = (scale * zoom).coerceIn(1f, 5f)
+                            val maxX = ((imageSize.width * (scale - 1)) / 2f).coerceAtLeast(0f)
+                            val maxY = ((imageSize.height * (scale - 1)) / 2f).coerceAtLeast(0f)
+                            offset = Offset(
+                                (offset.x + pan.x).coerceIn(-maxX, maxX),
+                                (offset.y + pan.y).coerceIn(-maxY, maxY)
+                            )
+                        }
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(photo.filePath.let { p -> if (p.startsWith("/")) JavaFile(p) else Uri.parse(p) })
-                        .memoryCacheKey(cacheKey)
-                        .diskCacheKey(cacheKey)
-                        .crossfade(true)
-                        .build(),
+                    model = photoImageRequest(context, photo.filePath, cacheKey),
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxSize()
-                        .graphicsLayer(scaleX = scale, scaleY = scale)
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y
+                        )
                 )
             }
         }
@@ -161,6 +188,16 @@ fun PhotoViewerScreen(
                 modifier = Modifier.align(Alignment.CenterEnd),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                IconButton(
+                    onClick = { sharePhoto(context, currentPhoto) },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
+                }
+
                 IconButton(
                     onClick = {
                         if (!isRotating) {
@@ -226,7 +263,7 @@ fun PhotoViewerScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         TextButton(
-                            onClick = { scale = level },
+                            onClick = { scale = level; offset = Offset.Zero },
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(0.dp)
                         ) {
@@ -242,7 +279,7 @@ fun PhotoViewerScreen(
             }
 
             // Metadata card
-            val accentColor = parseHexColor(currentPhoto.colorHex)
+            val accentColor = parseAccentHex(currentPhoto.colorHex)
             val dateStr = remember(currentPhoto.dateTaken) {
                 SimpleDateFormat("EEEE, MMMM d yyyy  •  h:mm a", Locale.getDefault())
                     .format(Date(currentPhoto.dateTaken))
@@ -297,7 +334,7 @@ fun PhotoViewerScreen(
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(parseHexColor(currentPhoto.dominantColorHex))
+                            .background(parseAccentHex(currentPhoto.dominantColorHex))
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
@@ -309,4 +346,22 @@ fun PhotoViewerScreen(
             }
         }
     }
+}
+
+private fun sharePhoto(context: android.content.Context, photo: PhotoEntity) {
+    val shareUri: Uri = if (photo.filePath.startsWith("/")) {
+        FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            JavaFile(photo.filePath)
+        )
+    } else {
+        Uri.parse(photo.filePath)
+    }
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "image/jpeg"
+        putExtra(Intent.EXTRA_STREAM, shareUri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, null))
 }

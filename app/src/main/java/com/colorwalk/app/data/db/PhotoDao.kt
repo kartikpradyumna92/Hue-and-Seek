@@ -14,11 +14,8 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE colorName = :colorName ORDER BY dateTaken DESC")
     fun getPhotosByColor(colorName: String): Flow<List<PhotoEntity>>
 
-    @Query("SELECT DISTINCT colorName, colorHex FROM photos")
+    @Query("SELECT colorName, colorHex FROM photos GROUP BY colorName ORDER BY COUNT(*) DESC")
     fun getDistinctColors(): Flow<List<ColorSummary>>
-
-    @Query("SELECT COUNT(*) FROM photos WHERE colorName = :colorName")
-    suspend fun countByColor(colorName: String): Int
 
     @Query("SELECT COUNT(*) FROM photos WHERE dateTaken = :dateTaken")
     suspend fun countByDateTaken(dateTaken: Long): Int
@@ -30,9 +27,6 @@ interface PhotoDao {
     // *rows* silently caps the streak (rows != days when a day has several photos).
     @Query("SELECT dateTaken FROM photos")
     suspend fun getAllPhotoDates(): List<Long>
-
-    @Query("SELECT id FROM photos WHERE dateTaken >= :midnightMs AND dateTaken < :tomorrowMidnightMs LIMIT 1")
-    suspend fun getPhotoIdForDay(midnightMs: Long, tomorrowMidnightMs: Long): Long?
 
     @Query("SELECT id FROM photos WHERE dateTaken >= :midnightMs AND dateTaken < :tomorrowMidnightMs AND filePath LIKE 'content://%' LIMIT 1")
     suspend fun getContentUriPhotoIdForDay(midnightMs: Long, tomorrowMidnightMs: Long): Long?
@@ -52,8 +46,6 @@ interface PhotoDao {
     @Query("DELETE FROM photos WHERE id NOT IN (SELECT MIN(id) FROM photos GROUP BY filePath)")
     suspend fun deleteFilepathDuplicates()
 
-    @Query("SELECT colorName, colorHex FROM photos GROUP BY colorName ORDER BY COUNT(*) DESC LIMIT 1")
-    suspend fun getFavouriteColor(): ColorSummary?
 }
 
 data class ColorSummary(

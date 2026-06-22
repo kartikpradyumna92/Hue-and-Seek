@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.colorwalk.app.ui.components.EmptyState
+import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.PhotoGridCard
 import com.colorwalk.app.ui.components.ScreenHeader
 import com.colorwalk.app.ui.theme.Spacing
@@ -98,7 +99,7 @@ fun PlaceAlbumScreen(
                 items(photos, key = { it.id }) { photo ->
                     PhotoGridCard(
                         photo = photo,
-                        accentColor = parseHexColor(photo.colorHex),
+                        accentColor = parseAccentHex(photo.colorHex),
                         onOpen = { viewModel.openPhoto(photo, photos) },
                         onDelete = { viewModel.deletePhoto(photo) },
                         showColorName = true,

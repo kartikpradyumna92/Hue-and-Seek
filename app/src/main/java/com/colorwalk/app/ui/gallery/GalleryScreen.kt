@@ -55,8 +55,6 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-internal fun parseHexColor(hex: String): Color = parseAccentHex(hex)
-
 private val TAB_LABELS = listOf("By Color", "By Date", "By Place")
 
 @OptIn(ExperimentalFoundationApi::class)

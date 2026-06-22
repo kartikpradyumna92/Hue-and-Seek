@@ -5,6 +5,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.23.0] - 2026-06-21
+
+Photo viewer pan + share, notification permission banner, coordinate bucketing fix, and D-section code quality pass.
+
+### Added
+- **Photo viewer: pan while zoomed** — after pinching in, the image can now be dragged to inspect any part of the frame. Pan is clamped to the image bounds so the image never slides off-screen. The pager's swipe-between-photos gesture is disabled while zoomed in, preventing accidental page flips mid-pan; it re-enables the moment scale returns to 1×.
+- **Photo viewer: share button** — a share icon appears in the top-right toolbar alongside the existing rotate/delete/location buttons. Tapping it sends the photo via `ACTION_SEND` using `FileProvider` so any receiving app can read the file.
+- **Settings: notification-blocked banner** — when the OS-level notification permission has been revoked, a `errorContainer` card appears above the notification toggles explaining that reminders are silenced and offering a one-tap "Open" button that deep-links directly to the app's system notification settings page. The check fires on every `RESUMED` lifecycle event so the banner disappears immediately after the user enables notifications without leaving the screen.
+
+### Fixed
+- **"By Place" clustering broke for photos in the Southern/Western hemispheres** — `coordinateLabel()` applied `Math.floor` to the absolute value of latitude/longitude before re-attaching the N/S/E/W suffix. For negative coordinates (S or W) this placed photos from two different 11 km cells into the same bucket and photos at the cell boundary into the wrong one. The fix floors the signed value, then formats the absolute value with the direction suffix. Added `Locale.US` to the `String.format` call to prevent comma decimal separators (e.g. German locale "33,8") from corrupting map keys.
+- **Notification icon rendered as a colored silhouette on Android 5+** — `android.R.drawable.ic_menu_camera` is an unstable platform drawable with color fills; the system notification bar requires a fully monochrome (alpha-channel-only) icon and tints it automatically. The old icon appeared as a solid white square on many devices. Replaced with a purpose-built monochrome camera vector at `res/drawable/ic_stat_notification.xml`.
+- **`backup_rules.xml` and `data_extraction_rules.xml` used `domain="cache"`** — `cache` is not a valid backup domain (valid values: `file`, `database`, `sharedpref`, `external`, `root`, `device_*`). The invalid rules caused 4 fatal lint errors that blocked `assembleRelease`. The `<exclude domain="cache">` lines were redundant because cache directories are excluded from backup by default; both lines removed.
+
+### Code quality (D-section)
+- **Removed unused Gradle dependencies** — `androidx.datastore:datastore-preferences` (Jetpack DataStore API never used; app uses `SharedPreferences` throughout) and `androidx.camera:camera-extensions` (no `CameraExtensionsSelector` import anywhere in the codebase). Replaced `camera-extensions` slot with `androidx.exifinterface:exifinterface:1.3.7` (see below).
+- **Removed dead DAO and repository methods** — `PhotoDao.countByColor`, `PhotoDao.getPhotoIdForDay`, `PhotoDao.getFavouriteColor`, and `PhotoRepository.getFavouriteColor` had zero callers; deleted.
+- **Removed unused SharedPreferences write** — `MainActivity` wrote `"permissions_requested" = true` in the `goHome` lambda but no code ever read that key; write removed.
+- **Consolidated duplicate hex-parse and image-request helpers** — `StatsScreen.parseStatsHexColor` and `GalleryScreen.parseHexColor` were both identical one-liners duplicating `parseAccentHex` in `PhotoImage.kt`. All callers now import `parseAccentHex` directly. The two inline `filePath.startsWith("/")` `ImageRequest.Builder` blocks in `PhotoViewerScreen` and `StatsScreen` were replaced with the existing `photoImageRequest()` helper from `PhotoImage.kt`.
+- **Extracted `StreakCalculator.todayMidnightMs()`** — the four-line `Calendar` boilerplate for computing local midnight was copy-pasted in `PhotoRepository.hasCapturedToday` and `StreakReminderReceiver`. Extracted to a single public helper; both callers updated.
+- **Switched to `androidx.exifinterface`** — `android.media.ExifInterface` (deprecated; mishandles several EXIF orientation tags) replaced with `androidx.exifinterface.media.ExifInterface` in `PhotoRepository` and `CameraScreen`.
+- **Enabled R8 shrinking for release builds** — `isMinifyEnabled = true`, `isShrinkResources = true`, and `proguardFiles()` now active in the `release` build type. Added `proguard-rules.pro` with keeps for Room entities/DAOs (reflection-instantiated), `@HiltViewModel` constructors, Kotlin coroutines dispatcher factories, and `*Annotation*`/`Signature` attributes required by Hilt/KSP.
+- **versionCode** bumped from 18 → 19; **versionName** from 1.22.0 → 1.23.0.
+
+### Tests
+- 168 JVM unit tests, 0 failures (net −5 from v1.22.0: removed the three `StreakCalculatorTest` helpers that depended on the deleted `getPhotoIdForDay` path; existing streak and DST tests unaffected).
+
+---
+
+## [1.22.0] - 2026-06-21
+
+Test coverage: F-section gaps closed, backfill crash fix on missing permissions.
+
+### Fixed
+- **`backfillLocationData` could crash with `SecurityException` when `READ_MEDIA_IMAGES` was denied** — the MediaStore query was not wrapped in a try-catch, unlike the identical query in `syncGalleryWithDatabase` Pass 2. A SecurityException from a denied permission would propagate uncaught and crash the Gallery. The query is now wrapped in `try/catch` and returns `null` on failure, making the backfill a graceful no-op when media permissions are missing (F5 / A3-A4 interaction).
+
+### Tests
+- **F2 — import-dedup (B5) DAO coverage**: Three new `PhotoDaoTest` cases for `countByDateTaken`: exact-millis match returns 1, off-by-one millis returns 0, two adjacent timestamps count independently. The `AlreadyImported` ViewModel path was already covered by `CameraViewModelTest`.
+- **F5 — `backfillLocationData` coverage**: Five new instrumented tests in `PhotoRepositoryIntegrationTest`: no-photos noop, real-GPS photos not queued, missing-GPS photos marked attempted, second call exits early (C1 idempotency), and delete+reinsert triggers a fresh attempt (C1 round-trip).
+- **versionCode** bumped from 17 → 18; **versionName** from 1.21.0 → 1.22.0.
+
+---
+
 ## [1.21.0] - 2026-06-21
 
 Performance: import OOM protection, lossless photo rotation, stale stats, and sync transaction batching.

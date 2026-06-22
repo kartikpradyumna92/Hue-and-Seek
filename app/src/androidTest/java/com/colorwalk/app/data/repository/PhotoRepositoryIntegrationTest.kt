@@ -280,6 +280,69 @@ class PhotoRepositoryIntegrationTest {
         assertTrue(42L in DeletionTombstones.deletedDates(context))
     }
 
+    // ── backfillLocationData (F5 / C1) ────────────────────────────────────────
+
+    @Test
+    fun backfillLocationData_withNoPhotos_doesNotThrow() = runTest {
+        repo.backfillLocationData()
+        assertTrue(db.photoDao().getAllPhotosSnapshot().isEmpty())
+    }
+
+    @Test
+    fun backfillLocationData_withAllPhotosHavingRealGps_doesNotMarkAnyAsAttempted() = runTest {
+        insertPhoto(dateTaken = daysAgoNoon(1), latitude = 37.77, longitude = -122.41)
+
+        repo.backfillLocationData()
+
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val attempted = prefs.getStringSet("backfill_attempted_ids", emptySet())
+        assertTrue("Photos with real GPS must not be queued for backfill", attempted!!.isEmpty())
+    }
+
+    @Test
+    fun backfillLocationData_withPhotosLackingGps_marksAllAsAttempted() = runTest {
+        val id1 = insertPhoto(dateTaken = daysAgoNoon(1))
+        val id2 = insertPhoto(dateTaken = daysAgoNoon(2))
+
+        repo.backfillLocationData()
+
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val attempted = prefs.getStringSet("backfill_attempted_ids", emptySet())!!
+            .mapNotNull { it.toLongOrNull() }.toSet()
+        assertTrue("id1 must be marked attempted", id1 in attempted)
+        assertTrue("id2 must be marked attempted", id2 in attempted)
+    }
+
+    @Test
+    fun backfillLocationData_calledTwice_secondCallIsNoop() = runTest {
+        insertPhoto(dateTaken = daysAgoNoon(1))
+
+        repo.backfillLocationData()   // first run — marks IDs attempted
+        repo.backfillLocationData()   // second run — toAttempt is empty, exits early
+
+        // Verify the DB was not corrupted across both calls.
+        assertEquals(1, db.photoDao().getAllPhotosSnapshot().size)
+    }
+
+    @Test
+    fun backfillLocationData_afterDeleteAndReinsert_freshAttemptMade() = runTest {
+        val id = insertPhoto(dateTaken = daysAgoNoon(1))
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+
+        repo.backfillLocationData()   // marks id as attempted
+
+        repo.deletePhoto(photo)       // clearBackfillAttempted(id) called in deletePhoto
+
+        val newId = insertPhoto(dateTaken = daysAgoNoon(1))
+
+        repo.backfillLocationData()   // must attempt newId since marker was cleared
+
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val attempted = prefs.getStringSet("backfill_attempted_ids", emptySet())!!
+            .mapNotNull { it.toLongOrNull() }.toSet()
+        assertTrue("Re-inserted photo must be marked attempted after fresh backfill", newId in attempted)
+    }
+
     // ── tagPhotoLocation (B7 regression) ──────────────────────────────────────
 
     @Test

@@ -254,6 +254,33 @@ class PhotoDaoTest {
         }
     }
 
+    // ── countByDateTaken (B5 import-dedup guard) ──────────────────────────────
+
+    @Test
+    fun countByDateTaken_withMatchingRow_returnsOne() = runTest {
+        val ts = midnightToday() + 3600_000L
+        dao.insert(makeEntity(dateTaken = ts))
+        assertEquals(1, dao.countByDateTaken(ts))
+    }
+
+    @Test
+    fun countByDateTaken_withNoMatchingRow_returnsZero() = runTest {
+        val ts = midnightToday() + 3600_000L
+        dao.insert(makeEntity(dateTaken = ts))
+        assertEquals("Off-by-one millis must not match", 0, dao.countByDateTaken(ts + 1))
+    }
+
+    @Test
+    fun countByDateTaken_exactMillisPrecision_eachTimestampCountsIndependently() = runTest {
+        val ts = midnightToday() + 5000L
+        dao.insert(makeEntity(dateTaken = ts))
+        dao.insert(makeEntity(dateTaken = ts + 500L))
+
+        assertEquals(1, dao.countByDateTaken(ts))
+        assertEquals(1, dao.countByDateTaken(ts + 500L))
+        assertEquals(0, dao.countByDateTaken(ts + 1000L))
+    }
+
     // ── countByColor ─────────────────────────────────────────────────────────
 
     @Test

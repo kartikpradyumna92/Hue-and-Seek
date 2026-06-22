@@ -7,5 +7,4 @@
 <full-backup-content>
     <include domain="database" path="colorwalk.db" />
     <include domain="sharedpref" path="app_prefs.xml" />
-    <exclude domain="cache" path="." />
 </full-backup-content>

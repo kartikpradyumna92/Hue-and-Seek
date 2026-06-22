@@ -2,6 +2,7 @@ package com.colorwalk.app.domain
 
 import java.time.Instant
 import java.time.ZoneId
+import java.util.Calendar
 
 object StreakCalculator {
 
@@ -26,6 +27,12 @@ object StreakCalculator {
         }
         return streak
     }
+
+    /** Returns epoch-millis of local midnight at the start of today. */
+    fun todayMidnightMs(): Long = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
 
     /**
      * Local-calendar-date index (epoch day) for an instant. Uses java.time so two

@@ -6,11 +6,11 @@ import android.content.Intent
 import com.colorwalk.app.data.db.AppDatabase
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.colorForDay
+
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
-import java.util.Calendar
 
 class StreakReminderReceiver : BroadcastReceiver() {
 
@@ -22,15 +22,8 @@ class StreakReminderReceiver : BroadcastReceiver() {
             try {
                 val dao = AppDatabase.getInstance(context).photoDao()
 
-                val cal = Calendar.getInstance().apply {
-                    set(Calendar.HOUR_OF_DAY, 0)
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }
-                val midnight = cal.timeInMillis
-                cal.add(Calendar.DAY_OF_MONTH, 1)
-                val tomorrowMidnight = cal.timeInMillis
+                val midnight = StreakCalculator.todayMidnightMs()
+                val tomorrowMidnight = midnight + 24L * 60 * 60 * 1000
                 val capturedToday = dao.getPhotoForDay(midnight, tomorrowMidnight) != null
 
                 if (!capturedToday) {

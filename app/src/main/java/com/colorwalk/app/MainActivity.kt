@@ -128,7 +128,6 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
             }
 
             val goHome = {
-                prefs.edit().putBoolean("permissions_requested", true).apply()
                 navController.navigate("home") {
                     popUpTo("permissions") { inclusive = true }
                 }

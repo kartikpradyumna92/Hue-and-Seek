@@ -3,7 +3,7 @@ package com.colorwalk.app.ui.camera
 import android.Manifest
 import android.content.Intent
 import android.graphics.BitmapFactory
-import android.media.ExifInterface
+import androidx.exifinterface.media.ExifInterface
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log

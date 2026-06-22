@@ -40,8 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.photoImageRequest
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.viewmodel.StatsUiState
@@ -176,7 +176,7 @@ private fun StatsSection(state: StatsUiState) {
         }
         if (state.favouriteColorName != null) {
             Spacer(Modifier.height(12.dp))
-            val favColor = state.favouriteColorHex?.let { parseStatsHexColor(it) } ?: Color.Gray
+            val favColor = state.favouriteColorHex?.let { parseAccentHex(it) } ?: Color.Gray
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -493,7 +493,7 @@ private fun CalendarDayCell(
         if (firstPhoto != null) {
             // The actual photo, ringed in its walk color — the calendar becomes a
             // mosaic of the user's own shots instead of abstract dots.
-            val color = parseStatsHexColor(firstPhoto.colorHex)
+            val color = parseAccentHex(firstPhoto.colorHex)
             val context = LocalContext.current
             Box(
                 modifier = Modifier
@@ -587,7 +587,7 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
     val context = LocalContext.current
     val pagerState = rememberPagerState(pageCount = { photos.size })
     val currentPhoto = photos[pagerState.currentPage]
-    val accentColor = parseStatsHexColor(currentPhoto.colorHex)
+    val accentColor = parseAccentHex(currentPhoto.colorHex)
     val dateStr = remember(currentPhoto.dateTaken) {
         SimpleDateFormat("EEEE, MMMM d, yyyy  •  h:mm a", Locale.getDefault())
             .format(Date(currentPhoto.dateTaken))
@@ -603,15 +603,9 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
             modifier = Modifier.fillMaxWidth()
         ) { page ->
             val photo = photos[page]
-            val pageAccent = parseStatsHexColor(photo.colorHex)
+            val pageAccent = parseAccentHex(photo.colorHex)
             AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(
-                        if (photo.filePath.startsWith("/")) JavaFile(photo.filePath)
-                        else Uri.parse(photo.filePath)
-                    )
-                    .crossfade(true)
-                    .build(),
+                model = photoImageRequest(context, photo.filePath),
                 contentDescription = "${photo.colorName} photo",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -704,7 +698,7 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
                     modifier = Modifier
                         .size(13.dp)
                         .clip(CircleShape)
-                        .background(parseStatsHexColor(currentPhoto.dominantColorHex))
+                        .background(parseAccentHex(currentPhoto.dominantColorHex))
                 )
                 Spacer(Modifier.width(5.dp))
                 Text(
@@ -718,6 +712,3 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
     }
 }
 
-private fun parseStatsHexColor(hex: String): Color = try {
-    Color(android.graphics.Color.parseColor(if (hex.startsWith("#")) hex else "#$hex"))
-} catch (_: Exception) { Color.Gray }
