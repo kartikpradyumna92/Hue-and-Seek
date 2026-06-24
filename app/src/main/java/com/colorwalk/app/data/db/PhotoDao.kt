@@ -20,6 +20,9 @@ interface PhotoDao {
     @Query("SELECT COUNT(*) FROM photos WHERE dateTaken = :dateTaken")
     suspend fun countByDateTaken(dateTaken: Long): Int
 
+    @Query("SELECT COUNT(*) FROM photos WHERE colorName = :colorName")
+    suspend fun countByColor(colorName: String): Int
+
     @Query("SELECT dateTaken FROM photos WHERE dateTaken >= :midnightMs AND dateTaken < :tomorrowMidnightMs LIMIT 1")
     suspend fun getPhotoForDay(midnightMs: Long, tomorrowMidnightMs: Long): Long?
 

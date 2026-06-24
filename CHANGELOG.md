@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **`PhotoDao.countByColor`** — re-introduced query (removed in v1.23.0 as dead code) in preparation for upcoming color-count feature.
+
+### Tests
+- Fixed `PhotoDaoTest` to call `getPhotoForDay` (returns `dateTaken`) instead of the removed `getPhotoIdForDay`; asserts on timestamp rather than row id.
+
+---
+
 ## [1.23.0] - 2026-06-21
 
 Photo viewer pan + share, notification permission banner, coordinate bucketing fix, and D-section code quality pass.

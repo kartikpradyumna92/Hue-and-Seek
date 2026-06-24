@@ -164,15 +164,15 @@ class PhotoDaoTest {
     @Test
     fun getPhotoIdForDay_withPhotoInDayWindow_returnsId() = runTest {
         val ts = midnightToday() + 7200_000L
-        val id = dao.insert(makeEntity(dateTaken = ts))
+        dao.insert(makeEntity(dateTaken = ts))
 
-        val result = dao.getPhotoIdForDay(midnightToday(), tomorrowMidnight())
-        assertEquals(id, result)
+        val result = dao.getPhotoForDay(midnightToday(), tomorrowMidnight())
+        assertEquals(ts, result)
     }
 
     @Test
     fun getPhotoIdForDay_withNoPhotoInDayWindow_returnsNull() = runTest {
-        val result = dao.getPhotoIdForDay(midnightToday(), tomorrowMidnight())
+        val result = dao.getPhotoForDay(midnightToday(), tomorrowMidnight())
         assertNull(result)
     }
 
