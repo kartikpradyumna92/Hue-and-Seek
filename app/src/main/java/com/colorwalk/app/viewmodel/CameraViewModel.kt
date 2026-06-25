@@ -21,7 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 sealed class CaptureState {
     object Idle : CaptureState()
     object Processing : CaptureState()
-    data class Success(val dominantHex: String) : CaptureState()
+    // Shown after a successful save — user can add a note or skip straight to Home.
+    data class AwaitingNote(val dominantHex: String, val photoId: Long) : CaptureState()
     data class Failed(
         val matchPercent: Float,
         val targetColorName: String,
@@ -64,7 +65,7 @@ class CameraViewModel @Inject constructor(
         val color = _targetColor.value
         viewModelScope.launch {
             _captureState.value = when (val result = repo.savePhoto(bitmap, color)) {
-                is SaveResult.Success          -> CaptureState.Success(result.validation.dominantHex)
+                is SaveResult.Success          -> CaptureState.AwaitingNote(result.validation.dominantHex, result.photoId)
                 is SaveResult.ValidationFailed -> CaptureState.Failed(
                     result.validation.matchPercent, color.name,
                     result.validation.actualDominantColor,
@@ -81,7 +82,7 @@ class CameraViewModel @Inject constructor(
         val color = _targetColor.value
         viewModelScope.launch {
             _captureState.value = when (val result = repo.importPhoto(uri, color)) {
-                is ImportResult.Success          -> CaptureState.Success(result.validation.dominantHex)
+                is ImportResult.Success          -> CaptureState.AwaitingNote(result.validation.dominantHex, result.photoId)
                 is ImportResult.ValidationFailed -> CaptureState.Failed(
                     result.validation.matchPercent, color.name,
                     result.validation.actualDominantColor,
@@ -93,6 +94,16 @@ class CameraViewModel @Inject constructor(
                 ImportResult.AlreadyImported     -> CaptureState.ImportDuplicate
                 ImportResult.StorageError        -> CaptureState.StorageError
             }
+        }
+    }
+
+    fun saveNoteForPhoto(photoId: Long, note: String, onDone: () -> Unit) {
+        viewModelScope.launch {
+            // Reuse the same EXIF + MediaStore write path as the newsfeed editor.
+            val photo = repo.getAllPhotosSnapshot().firstOrNull { it.id == photoId }
+            if (photo != null) repo.saveDescription(photo, note)
+            _captureState.value = CaptureState.Idle
+            onDone()
         }
     }
 

@@ -2,6 +2,7 @@ package com.colorwalk.app.viewmodel
 
 import android.graphics.Bitmap
 import android.net.Uri
+import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.data.repository.ImportResult
 import com.colorwalk.app.data.repository.PhotoRepository
 import com.colorwalk.app.data.repository.SaveResult
@@ -9,6 +10,7 @@ import com.colorwalk.app.domain.ColorValidator
 import com.colorwalk.app.domain.colorForDay
 import com.colorwalk.app.util.MainDispatcherRule
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -36,6 +38,24 @@ class CameraViewModelTest {
 
     private fun buildViewModel() = CameraViewModel(repo)
 
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    private fun successValidation(hex: String = "#FF0000") = ColorValidator.ValidationResult(
+        passed = true,
+        dominantHex = hex,
+        dominantName = "Red",
+        matchPercent = 0.85f,
+        actualDominantColor = "Red"
+    )
+
+    private fun failedValidation() = ColorValidator.ValidationResult(
+        passed = false,
+        dominantHex = "#00FF00",
+        dominantName = "Green",
+        matchPercent = 0.20f,
+        actualDominantColor = "Green"
+    )
+
     // ── targetColor ──────────────────────────────────────────────────────────
 
     @Test
@@ -45,7 +65,7 @@ class CameraViewModelTest {
         assertEquals(
             "targetColor must equal colorForDay(now)",
             expected,
-            vm.targetColor.value   // targetColor is now a StateFlow
+            vm.targetColor.value
         )
     }
 
@@ -72,9 +92,7 @@ class CameraViewModelTest {
 
     @Test
     fun onPhotoCaptured_immediatelyTransitionsToProcessing() = runTest {
-        // Block savePhoto until after we check the state
         coEvery { repo.savePhoto(any(), any()) } coAnswers {
-            // Suspend long enough for us to observe Processing first
             kotlinx.coroutines.delay(10_000)
             SaveResult.StorageError
         }
@@ -82,42 +100,31 @@ class CameraViewModelTest {
         val vm = buildViewModel()
         vm.onPhotoCaptured(bitmap)
 
-        // Before advanceUntilIdle, Processing is the immediate state
         assertEquals(CaptureState.Processing, vm.captureState.value)
     }
 
     @Test
-    fun onPhotoCaptured_withSuccessResult_transitionsToSuccessWithCorrectHex() = runTest {
+    fun onPhotoCaptured_withSuccessResult_transitionsToAwaitingNoteWithCorrectHexAndId() = runTest {
         val dominantHex = "#FF0000"
-        val validation = ColorValidator.ValidationResult(
-            passed = true,
-            dominantHex = dominantHex,
-            dominantName = "Red",
-            matchPercent = 0.85f,
-            actualDominantColor = "Red"
-        )
+        val photoId = 42L
         val uri = mockk<Uri>(relaxed = true)
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.Success(uri, validation)
+        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.Success(uri, successValidation(dominantHex), photoId)
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(bitmap)
         advanceUntilIdle()
 
         val state = vm.captureState.value
-        assertTrue("Expected Success state, got $state", state is CaptureState.Success)
-        assertEquals(dominantHex, (state as CaptureState.Success).dominantHex)
+        assertTrue("Expected AwaitingNote state, got $state", state is CaptureState.AwaitingNote)
+        with(state as CaptureState.AwaitingNote) {
+            assertEquals(dominantHex, this.dominantHex)
+            assertEquals(photoId, this.photoId)
+        }
     }
 
     @Test
     fun onPhotoCaptured_withValidationFailedResult_transitionsToFailedWithCorrectValues() = runTest {
-        val validation = ColorValidator.ValidationResult(
-            passed = false,
-            dominantHex = "#00FF00",
-            dominantName = "Green",
-            matchPercent = 0.20f,
-            actualDominantColor = "Green"
-        )
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.ValidationFailed(validation)
+        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(bitmap)
@@ -146,6 +153,21 @@ class CameraViewModelTest {
     // ── onPhotoImported ──────────────────────────────────────────────────────
 
     @Test
+    fun onPhotoImported_withSuccessResult_transitionsToAwaitingNoteWithCorrectId() = runTest {
+        val photoId = 99L
+        val uri = mockk<Uri>(relaxed = true)
+        coEvery { repo.importPhoto(any(), any()) } returns ImportResult.Success(uri, successValidation(), photoId)
+
+        val vm = buildViewModel()
+        vm.onPhotoImported(mockk(relaxed = true))
+        advanceUntilIdle()
+
+        val state = vm.captureState.value
+        assertTrue("Expected AwaitingNote after import success", state is CaptureState.AwaitingNote)
+        assertEquals(photoId, (state as CaptureState.AwaitingNote).photoId)
+    }
+
+    @Test
     fun onPhotoImported_withAlreadyImported_transitionsToImportDuplicate() = runTest {
         coEvery { repo.importPhoto(any(), any()) } returns ImportResult.AlreadyImported
 
@@ -154,6 +176,68 @@ class CameraViewModelTest {
         advanceUntilIdle()
 
         assertEquals(CaptureState.ImportDuplicate, vm.captureState.value)
+    }
+
+    @Test
+    fun onPhotoImported_withNoDateMetadata_transitionsToImportNoDate() = runTest {
+        coEvery { repo.importPhoto(any(), any()) } returns ImportResult.NoDateMetadata
+
+        val vm = buildViewModel()
+        vm.onPhotoImported(mockk(relaxed = true))
+        advanceUntilIdle()
+
+        assertEquals(CaptureState.ImportNoDate, vm.captureState.value)
+    }
+
+    @Test
+    fun onPhotoImported_withWrongDay_transitionsToImportWrongDay() = runTest {
+        val ts = 1_700_000_000_000L
+        coEvery { repo.importPhoto(any(), any()) } returns ImportResult.NotTakenToday(ts)
+
+        val vm = buildViewModel()
+        vm.onPhotoImported(mockk(relaxed = true))
+        advanceUntilIdle()
+
+        val state = vm.captureState.value
+        assertTrue(state is CaptureState.ImportWrongDay)
+        assertEquals(ts, (state as CaptureState.ImportWrongDay).dateTaken)
+    }
+
+    // ── saveNoteForPhoto ─────────────────────────────────────────────────────
+
+    @Test
+    fun saveNoteForPhoto_withMatchingPhoto_callsSaveDescriptionAndResetsToIdle() = runTest {
+        val photoId = 7L
+        val photo = PhotoEntity(
+            id = photoId, filePath = "file:///photos/test.jpg",
+            colorName = "Blue", colorHex = "#1E88E5", dateTaken = 0L,
+            latitude = null, longitude = null, locationName = null,
+            dominantColorHex = "#1E88E5"
+        )
+        coEvery { repo.getAllPhotosSnapshot() } returns listOf(photo)
+
+        var doneCalled = false
+        val vm = buildViewModel()
+        vm.saveNoteForPhoto(photoId, "Great blue sky", onDone = { doneCalled = true })
+        advanceUntilIdle()
+
+        coVerify { repo.saveDescription(photo, "Great blue sky") }
+        assertEquals(CaptureState.Idle, vm.captureState.value)
+        assertTrue("onDone callback must be invoked", doneCalled)
+    }
+
+    @Test
+    fun saveNoteForPhoto_withNoMatchingPhoto_stillResetsToIdleAndCallsDone() = runTest {
+        coEvery { repo.getAllPhotosSnapshot() } returns emptyList()
+
+        var doneCalled = false
+        val vm = buildViewModel()
+        vm.saveNoteForPhoto(999L, "orphan note", onDone = { doneCalled = true })
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repo.saveDescription(any(), any()) }
+        assertEquals(CaptureState.Idle, vm.captureState.value)
+        assertTrue(doneCalled)
     }
 
     // ── startCapture / onCaptureError ────────────────────────────────────────
@@ -184,20 +268,14 @@ class CameraViewModelTest {
     // ── resetState ───────────────────────────────────────────────────────────
 
     @Test
-    fun resetState_fromSuccess_transitionsBackToIdle() = runTest {
-        val validation = ColorValidator.ValidationResult(
-            passed = true,
-            dominantHex = "#1E88E5",
-            dominantName = "Blue",
-            matchPercent = 0.9f,
-            actualDominantColor = "Blue"
-        )
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.Success(mockk(relaxed = true), validation)
+    fun resetState_fromAwaitingNote_transitionsBackToIdle() = runTest {
+        val uri = mockk<Uri>(relaxed = true)
+        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.Success(uri, successValidation(), 1L)
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(bitmap)
         advanceUntilIdle()
-        assertTrue(vm.captureState.value is CaptureState.Success)
+        assertTrue(vm.captureState.value is CaptureState.AwaitingNote)
 
         vm.resetState()
 
@@ -206,14 +284,7 @@ class CameraViewModelTest {
 
     @Test
     fun resetState_fromFailed_transitionsBackToIdle() = runTest {
-        val validation = ColorValidator.ValidationResult(
-            passed = false,
-            dominantHex = "#808080",
-            dominantName = "Gray",
-            matchPercent = 0.05f,
-            actualDominantColor = "Gray"
-        )
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.ValidationFailed(validation)
+        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(bitmap)

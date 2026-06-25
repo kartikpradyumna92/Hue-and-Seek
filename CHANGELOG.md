@@ -5,13 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [1.24.0] - 2026-06-25
+
+Newsfeed journal, photo notes, swipe navigation overhaul, gallery viewer improvements, and permission timing fix.
 
 ### Added
-- **`PhotoDao.countByColor`** — re-introduced query (removed in v1.23.0 as dead code) in preparation for upcoming color-count feature.
+- **Newsfeed journal** — swipe up from Home (or tap the peek strip) opens a LazyColumn journal view showing all walk photos newest-first. Each card displays the color name + hex code, date, reverse-geocoded location, a square photo, and an inline note. Swipe right anywhere to return to Home.
+- **Newsfeed peek strip** — three most-recent photo thumbnails peek at the bottom of the Home screen as a "Your walks" affordance, making the newsfeed discoverable without reading accessibility text.
+- **Photo notes / descriptions** — add a freeform note to any photo from the newsfeed *or* from the gallery full-frame viewer. Notes persist in the Room DB (`description` column, schema v2) and are simultaneously written to the JPEG EXIF `ImageDescription` tag so they survive in Google Photos and any export.
+- **Post-capture note prompt** — after a photo validates as a color match, a note prompt appears before returning to Home. Users can type a note and tap Save, or skip. The prompt auto-focuses the keyboard and uses the same EXIF write path as the newsfeed editor.
+- **Gallery full-frame viewer: inline note editing** — Line 4 of the metadata card shows the note when present (tap to edit) or an "Add a note…" placeholder (tap to add). Edits are reflected immediately in the viewer without leaving the screen; Room re-emits the change to all other views automatically.
+- **Gallery full-frame viewer: swipe between photos** — replaced `detectTransformGestures` (which consumed all touch events) with a custom `awaitEachGesture` handler. Single-finger swipes at `scale == 1×` now pass through to `HorizontalPager` so left/right swipe navigates between photos. Pinch-to-zoom and single-finger pan while zoomed still work.
+- **Gallery metadata card redesign** — fixed 4-line layout: (1) color name + dominant hex on the same row, (2) date, (3) location reserved space, (4) note with "Show more / Show less" for long captions.
+- **4-direction swipe gestures on Home** — swipe right → camera, left → gallery, up → newsfeed, down → settings. Dominant axis is determined by comparing absolute X/Y delta so diagonal swipes don't mis-fire.
+- **Back gestures** — swipe right on Newsfeed returns to Home; swipe up on Settings returns to Home; swipe left on Camera returns to Home.
+
+### Fixed
+- **Streak message wrong at 21–29 days** — "Two weeks strong" was shown all the way through day 29. Added a `streak >= 21` branch that shows the actual day count and a nudge toward the 30-day mark.
+- **Google Photos not reflecting notes added after backup** — writing EXIF only to the private file didn't update the MediaStore copy Google Photos had already indexed. Fix: set `IS_PENDING = 1`, open the MediaStore URI as a file descriptor, write EXIF, then clear `IS_PENDING = 0`.
+- **Permission dialog appearing before onboarding** — `ACCESS_MEDIA_LOCATION` was requested in `Activity.onCreate`, firing before Compose rendered the first frame. Moved into a `LaunchedEffect(Unit)` inside the `"home"` route so it only fires after the user completes onboarding and the "Before we begin" permissions screen.
+- **Note not reflected immediately in gallery viewer** — `_viewerState` held a snapshot of the photo list; saving a note updated Room but the viewer never saw the new `description`. Fixed by optimistically patching `_viewerState.photos` after `repo.saveDescription()` returns, using the same trim/blank→null logic the repository applies.
+
+### Schema
+- **DB version bumped 1 → 2** — `ALTER TABLE photos ADD COLUMN description TEXT`; existing rows get `NULL` (shows "Add a note…" placeholder).
+
+### Code quality
+- Removed dead `CaptureState.Success` sealed class variant and its unreachable `ResultCard` branch — success now always transitions to `AwaitingNote`.
+- Removed duplicate `import androidx.compose.ui.draw.clip` in `HomeScreen.kt`.
+- Replaced fully-qualified `BorderStroke`, `LocalFocusManager`, `TextOverflow`, `ClickableText`, `buildAnnotatedString`, and `SpanStyle` references with proper imports across `CameraScreen` and `PhotoViewerScreen`.
+- Replaced deprecated `ClickableText` (Material3) with `Text + Modifier.clickable` in the gallery viewer's "Show more / Show less" control.
 
 ### Tests
-- Fixed `PhotoDaoTest` to call `getPhotoForDay` (returns `dateTaken`) instead of the removed `getPhotoIdForDay`; asserts on timestamp rather than row id.
+- **`CameraViewModelTest`** — updated all `SaveResult.Success` calls to include `photoId`; replaced `CaptureState.Success` assertions with `AwaitingNote`; added tests for `saveNoteForPhoto` (saves description + calls `onDone`, handles missing photo ID gracefully); added import/wrong-day/no-date ViewModel tests.
+- **`NewsfeedViewModelTest`** (new) — 6 tests covering photos flow, `saveDescription` delegation, and swipe-right threshold direction logic.
+- **`PhotoDaoTest`** — 5 new tests for `updateDescription`: sets value, clears with null, overwrites, isolates to correct row, new inserts default to null.
+- **`PhotoRepositoryIntegrationTest`** — 4 new tests for `saveDescription` DB layer: persists text, stores null for blank/null input, overwrites previous note.
 
 ---
 

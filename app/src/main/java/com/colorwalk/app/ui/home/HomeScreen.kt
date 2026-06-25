@@ -13,7 +13,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
@@ -47,6 +47,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.colorForDay
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.ui.components.photoImageRequest
 import com.colorwalk.app.viewmodel.CelebrationState
 import com.colorwalk.app.viewmodel.HomeViewModel
 import nl.dionsegijn.konfetti.compose.KonfettiView
@@ -67,6 +71,7 @@ private fun streakMessage(capturedToday: Boolean, streak: Int, colorName: String
     return if (capturedToday) {
         when {
             streak >= 30 -> "30+ days! You have an extraordinary eye for color."
+            streak >= 21 -> "${streak} days — the 30-day mark is close. $colorName was a great find."
             streak >= 14 -> "Two weeks strong! $colorName was a great find today."
             streak >= 7  -> "One full week! Your eye is getting sharper every day."
             streak >= 3  -> "Great work! $colorName captured. Keep the momentum!"
@@ -91,9 +96,11 @@ fun HomeScreen(
     onOpenGallery: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenStats: () -> Unit,
+    onOpenNewsfeed: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val recentPhotos by viewModel.recentPhotos.collectAsState()
     val color = state.colorOfDay
     val context = LocalContext.current
 
@@ -142,7 +149,8 @@ fun HomeScreen(
         label = "colorAnim"
     )
 
-    var swipeDelta by remember { mutableFloatStateOf(0f) }
+    var swipeX by remember { mutableFloatStateOf(0f) }
+    var swipeY by remember { mutableFloatStateOf(0f) }
 
     Box(
         modifier = Modifier
@@ -153,18 +161,26 @@ fun HomeScreen(
                 )
             )
             .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { swipeDelta = 0f },
+                detectDragGestures(
+                    onDragStart = { swipeX = 0f; swipeY = 0f },
                     onDragEnd = {
                         val threshold = 80.dp.toPx()
-                        if (swipeDelta > threshold) onOpenCamera()
-                        else if (swipeDelta < -threshold) onOpenGallery()
-                        swipeDelta = 0f
+                        if (kotlin.math.abs(swipeX) > kotlin.math.abs(swipeY)) {
+                            // Horizontal gesture
+                            if (swipeX > threshold) onOpenCamera()
+                            else if (swipeX < -threshold) onOpenGallery()
+                        } else {
+                            // Vertical gesture
+                            if (swipeY < -threshold) onOpenNewsfeed()
+                            else if (swipeY > threshold) onOpenSettings()
+                        }
+                        swipeX = 0f; swipeY = 0f
                     },
-                    onDragCancel = { swipeDelta = 0f }
+                    onDragCancel = { swipeX = 0f; swipeY = 0f }
                 ) { change, dragAmount ->
                     change.consume()
-                    swipeDelta += dragAmount
+                    swipeX += dragAmount.x
+                    swipeY += dragAmount.y
                 }
             }
     ) {
@@ -336,14 +352,15 @@ fun HomeScreen(
 
             Spacer(Modifier.height(10.dp))
 
-            // Gesture affordance — the swipe shortcuts were previously undiscoverable
+            // Gesture affordance
             Text(
-                "Swipe right for camera  •  left for gallery",
+                "← gallery  •  camera →  •  ↓ settings",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
             )
 
-            Spacer(Modifier.height(20.dp))
+            // Space for the peek strip overlay below
+            Spacer(Modifier.height(if (recentPhotos.isNotEmpty()) 116.dp else 20.dp))
         }
 
         // Confetti celebration overlay
@@ -368,6 +385,99 @@ fun HomeScreen(
                 contentDescription = "Notification settings",
                 tint = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.size(28.dp)
+            )
+        }
+
+        // Newsfeed peek strip — only shown when there are photos
+        if (recentPhotos.isNotEmpty()) {
+            NewsfeedPeekStrip(
+                photos = recentPhotos,
+                accentColor = animatedColor,
+                backgroundColor = MaterialTheme.colorScheme.background,
+                onClick = onOpenNewsfeed,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+    }
+}
+
+@Composable
+private fun NewsfeedPeekStrip(
+    photos: List<PhotoEntity>,
+    accentColor: Color,
+    backgroundColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    // Strip total height: photos fill 96dp, bottom gradient eats 40dp, label sits on top.
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(96.dp)
+            .clickable(onClick = onClick)
+    ) {
+        // Photo row — 3 panels, equal width, full height, cropped
+        Row(modifier = Modifier.fillMaxSize()) {
+            photos.forEach { photo ->
+                AsyncImage(
+                    model = photoImageRequest(context, photo.filePath, "peek_${photo.id}"),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .then(
+                            // Round the top corners of the first and last cell
+                            when (photos.indexOf(photo)) {
+                                0 -> Modifier.clip(RoundedCornerShape(topStart = 16.dp))
+                                photos.lastIndex -> Modifier.clip(RoundedCornerShape(topEnd = 16.dp))
+                                else -> Modifier
+                            }
+                        )
+                )
+            }
+        }
+
+        // Vertical gradient: transparent at top → opaque background at bottom
+        // Creates the "peeking from below" illusion.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.55f to backgroundColor.copy(alpha = 0.15f),
+                        1.0f to backgroundColor.copy(alpha = 0.92f)
+                    )
+                )
+        )
+
+        // Label row pinned to the top of the strip
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 10.dp)
+                .background(
+                    color = backgroundColor.copy(alpha = 0.55f),
+                    shape = RoundedCornerShape(20.dp)
+                )
+                .padding(horizontal = 14.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                Icons.Default.CollectionsBookmark,
+                contentDescription = null,
+                tint = accentColor,
+                modifier = Modifier.size(13.dp)
+            )
+            Text(
+                "Your walks",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = accentColor,
+                letterSpacing = 0.3.sp
             )
         }
     }

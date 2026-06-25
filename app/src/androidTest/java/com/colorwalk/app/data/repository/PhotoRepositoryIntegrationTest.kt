@@ -324,6 +324,57 @@ class PhotoRepositoryIntegrationTest {
         assertEquals(1, db.photoDao().getAllPhotosSnapshot().size)
     }
 
+    // ── saveDescription (DB layer) ────────────────────────────────────────────
+
+    @Test
+    fun saveDescription_persistsTextToDatabase() = runTest {
+        val id = insertPhoto(dateTaken = daysAgoNoon(1))
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+
+        repo.saveDescription(photo, "a lovely red sunset")
+
+        val updated = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        assertEquals("a lovely red sunset", updated.description)
+    }
+
+    @Test
+    fun saveDescription_withBlankText_storesNullInDatabase() = runTest {
+        val id = insertPhoto(dateTaken = daysAgoNoon(1))
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+
+        repo.saveDescription(photo, "   ")   // blank — repo trims and converts to null
+
+        val updated = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        assertNull("Blank note must be stored as null", updated.description)
+    }
+
+    @Test
+    fun saveDescription_withNullText_storesNullInDatabase() = runTest {
+        val id = insertPhoto(dateTaken = daysAgoNoon(1))
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        // Pre-set a note, then clear it.
+        repo.saveDescription(photo, "to be cleared")
+        val withNote = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+
+        repo.saveDescription(withNote, null)
+
+        val cleared = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        assertNull("Null text must clear the stored description", cleared.description)
+    }
+
+    @Test
+    fun saveDescription_overwritesPreviousNote() = runTest {
+        val id = insertPhoto(dateTaken = daysAgoNoon(1))
+        val photo = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        repo.saveDescription(photo, "draft one")
+        val after1 = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+
+        repo.saveDescription(after1, "final note")
+
+        val after2 = db.photoDao().getAllPhotosSnapshot().first { it.id == id }
+        assertEquals("final note", after2.description)
+    }
+
     @Test
     fun backfillLocationData_afterDeleteAndReinsert_freshAttemptMade() = runTest {
         val id = insertPhoto(dateTaken = daysAgoNoon(1))

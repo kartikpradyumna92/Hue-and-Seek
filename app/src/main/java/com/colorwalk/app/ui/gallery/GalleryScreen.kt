@@ -84,7 +84,8 @@ fun GalleryScreen(
             initialIndex = viewerState!!.initialIndex,
             onClose = { viewModel.closePhoto() },
             onDelete = { viewModel.deletePhoto(it) },
-            onRotate = { photo, onDone -> viewModel.rotatePhoto(photo, onDone) }
+            onRotate = { photo, onDone -> viewModel.rotatePhoto(photo, onDone) },
+            onSaveDescription = { photo, text -> viewModel.saveDescription(photo, text) }
         )
         return
     }

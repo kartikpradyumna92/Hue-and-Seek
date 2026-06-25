@@ -14,8 +14,10 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -33,13 +35,23 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -123,7 +135,26 @@ fun CameraScreen(
         ActivityResultContracts.PickVisualMedia()
     ) { uri -> if (uri != null) viewModel.onPhotoImported(uri) }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    var swipeXDelta by remember { mutableFloatStateOf(0f) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { swipeXDelta = 0f },
+                    onDragEnd = {
+                        if (swipeXDelta < -80.dp.toPx()) onBack()
+                        swipeXDelta = 0f
+                    },
+                    onDragCancel = { swipeXDelta = 0f }
+                ) { change, dragAmount ->
+                    change.consume()
+                    swipeXDelta += dragAmount
+                }
+            }
+    ) {
 
         // key(cameraSelector) destroys and recreates the AndroidView only when the user
         // flips between front/back — not on every recomposition (zoom taps, state changes, etc.).
@@ -346,9 +377,23 @@ fun CameraScreen(
             }
         }
 
+        // Note prompt — full overlay so the keyboard has room to appear
+        val awaitingNote = captureState as? CaptureState.AwaitingNote
+        if (awaitingNote != null) {
+            NotePromptCard(
+                state = awaitingNote,
+                onSkip = onBack,
+                onSave = { note ->
+                    viewModel.saveNoteForPhoto(awaitingNote.photoId, note, onDone = onBack)
+                }
+            )
+        }
+
         // Result overlay — bottom-anchored card in the thumb zone
         AnimatedVisibility(
-            visible = captureState !is CaptureState.Idle && captureState !is CaptureState.Processing,
+            visible = captureState !is CaptureState.Idle
+                    && captureState !is CaptureState.Processing
+                    && captureState !is CaptureState.AwaitingNote,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
             exit = fadeOut(),
             modifier = Modifier
@@ -362,6 +407,145 @@ fun CameraScreen(
                 onDismiss = { viewModel.resetState() },
                 onBack = onBack
             )
+        }
+    }
+}
+
+@Composable
+private fun NotePromptCard(
+    state: CaptureState.AwaitingNote,
+    onSkip: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    val accentColor = parseResultHex(state.dominantHex)
+    var noteText by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.75f))
+            .imePadding(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1B22)),
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Color swatch + success indicator
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Color(0xFF4CAF50),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        "Color Match!",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clip(CircleShape)
+                            .background(accentColor)
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                Text(
+                    "Add a note to this photo",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 14.sp
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                // Text field
+                BasicTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        lineHeight = 22.sp
+                    ),
+                    cursorBrush = SolidColor(accentColor),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = {
+                        focusManager.clearFocus()
+                        if (noteText.isNotBlank()) onSave(noteText) else onSkip()
+                    }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    decorationBox = { inner ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color.White.copy(alpha = 0.08f))
+                                .padding(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
+                            if (noteText.isEmpty()) {
+                                Text(
+                                    "What did you find? Where was it?",
+                                    color = Color.White.copy(alpha = 0.3f),
+                                    fontSize = 15.sp,
+                                    fontStyle = FontStyle.Italic
+                                )
+                            }
+                            inner()
+                        }
+                    }
+                )
+
+                Spacer(Modifier.height(18.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onSkip,
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(
+                            1.dp, Color.White.copy(alpha = 0.25f)
+                        )
+                    ) {
+                        Text("Skip", color = Color.White.copy(alpha = 0.6f), fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = {
+                            focusManager.clearFocus()
+                            onSave(noteText)
+                        },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+                        enabled = noteText.isNotBlank()
+                    ) {
+                        Text("Save", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
     }
 }
@@ -505,35 +689,6 @@ private fun ResultCard(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             when (state) {
-                is CaptureState.Success -> {
-                    Icon(
-                        Icons.Default.CheckCircle, contentDescription = null,
-                        tint = Color(0xFF4CAF50), modifier = Modifier.size(48.dp)
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Text("Color Match!", style = MaterialTheme.typography.headlineMedium, color = Color.White)
-                    Spacer(Modifier.height(10.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        ResultSwatch(color = targetSwatch, label = targetColorName, sub = "Target")
-                        Spacer(Modifier.width(28.dp))
-                        ResultSwatch(
-                            color = parseResultHex(state.dominantHex),
-                            label = state.dominantHex.uppercase(),
-                            sub = "You found"
-                        )
-                    }
-                    Spacer(Modifier.height(18.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = onBack,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
-                        ) { Text("Done", style = MaterialTheme.typography.labelLarge) }
-                        OutlinedButton(onClick = onDismiss) {
-                            Text("Take Another", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-                }
-
                 is CaptureState.Failed -> {
                     val pct = (state.matchPercent * 100).toInt()
                     val needPct = (com.colorwalk.app.domain.ColorValidator.MIN_TARGET_SHARE * 100).toInt()

@@ -4,8 +4,14 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -13,12 +19,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -53,7 +68,8 @@ fun PhotoViewerScreen(
     initialIndex: Int,
     onClose: () -> Unit,
     onDelete: (PhotoEntity) -> Unit,
-    onRotate: (PhotoEntity, onDone: () -> Unit) -> Unit
+    onRotate: (PhotoEntity, onDone: () -> Unit) -> Unit,
+    onSaveDescription: (PhotoEntity, String?) -> Unit = { _, _ -> }
 ) {
     // Photos already arrive newest-first; page 0 = newest.
     // Swiping left → higher page index → older photo (standard photo-app convention).
@@ -123,15 +139,53 @@ fun PhotoViewerScreen(
                     .fillMaxSize()
                     .clipToBounds()
                     .onSizeChanged { imageSize = it }
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            scale = (scale * zoom).coerceIn(1f, 5f)
-                            val maxX = ((imageSize.width * (scale - 1)) / 2f).coerceAtLeast(0f)
-                            val maxY = ((imageSize.height * (scale - 1)) / 2f).coerceAtLeast(0f)
-                            offset = Offset(
-                                (offset.x + pan.x).coerceIn(-maxX, maxX),
-                                (offset.y + pan.y).coerceIn(-maxY, maxY)
-                            )
+                    .pointerInput(scale) {
+                        // Custom gesture handler so single-finger swipes at scale=1 reach
+                        // HorizontalPager. Only consume events when pinching (2+ pointers)
+                        // or panning while already zoomed in (scale > 1).
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            var active = true
+                            while (active) {
+                                val event = awaitPointerEvent()
+                                val pressed = event.changes.filter { it.pressed }
+                                if (pressed.isEmpty()) {
+                                    active = false
+                                } else when {
+                                    pressed.size >= 2 -> {
+                                        // Pinch zoom + pan
+                                        event.changes.forEach { it.consume() }
+                                        val c1 = pressed[0]
+                                        val c2 = pressed[1]
+                                        val prevDist = (c1.previousPosition - c2.previousPosition).getDistance()
+                                        val currDist = (c1.position - c2.position).getDistance()
+                                        val zoomFactor = if (prevDist > 0f) currDist / prevDist else 1f
+                                        val prevCentroid = (c1.previousPosition + c2.previousPosition) / 2f
+                                        val currCentroid = (c1.position + c2.position) / 2f
+                                        val panDelta = currCentroid - prevCentroid
+                                        scale = (scale * zoomFactor).coerceIn(1f, 5f)
+                                        val maxX = ((imageSize.width * (scale - 1)) / 2f).coerceAtLeast(0f)
+                                        val maxY = ((imageSize.height * (scale - 1)) / 2f).coerceAtLeast(0f)
+                                        offset = Offset(
+                                            (offset.x + panDelta.x).coerceIn(-maxX, maxX),
+                                            (offset.y + panDelta.y).coerceIn(-maxY, maxY)
+                                        )
+                                    }
+                                    scale > 1f -> {
+                                        // Single-finger pan while zoomed in
+                                        event.changes.forEach { it.consume() }
+                                        val change = pressed[0]
+                                        val panDelta = change.position - change.previousPosition
+                                        val maxX = ((imageSize.width * (scale - 1)) / 2f).coerceAtLeast(0f)
+                                        val maxY = ((imageSize.height * (scale - 1)) / 2f).coerceAtLeast(0f)
+                                        offset = Offset(
+                                            (offset.x + panDelta.x).coerceIn(-maxX, maxX),
+                                            (offset.y + panDelta.y).coerceIn(-maxY, maxY)
+                                        )
+                                    }
+                                    // scale == 1f, single touch → don't consume; HorizontalPager handles the swipe
+                                }
+                            }
                         }
                     },
                 contentAlignment = Alignment.Center
@@ -278,11 +332,24 @@ fun PhotoViewerScreen(
                 }
             }
 
-            // Metadata card
+            // Metadata card — always 4 lines, fixed structure
             val accentColor = parseAccentHex(currentPhoto.colorHex)
+            val dominantColor = parseAccentHex(currentPhoto.dominantColorHex)
             val dateStr = remember(currentPhoto.dateTaken) {
                 SimpleDateFormat("EEEE, MMMM d yyyy  •  h:mm a", Locale.getDefault())
                     .format(Date(currentPhoto.dateTaken))
+            }
+            var captionExpanded by remember(currentPhoto.id) { mutableStateOf(false) }
+            var captionOverflows by remember(currentPhoto.id) { mutableStateOf(false) }
+            var editingNote by remember(currentPhoto.id) { mutableStateOf(false) }
+            var draftNote by remember(currentPhoto.id) { mutableStateOf(currentPhoto.description ?: "") }
+            val noteFocusRequester = remember(currentPhoto.id) { FocusRequester() }
+            val focusManager = LocalFocusManager.current
+
+            fun commitNote() {
+                onSaveDescription(currentPhoto, draftNote)
+                editingNote = false
+                focusManager.clearFocus()
             }
 
             Column(
@@ -292,27 +359,57 @@ fun PhotoViewerScreen(
                         color = Color.Black.copy(alpha = 0.75f),
                         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
                     )
-                    .padding(horizontal = 20.dp, vertical = 14.dp)
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
-                            .background(accentColor)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        currentPhoto.colorName,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = accentColor
-                    )
+                // Line 1: ● ColorName   ● Dominant #hex
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .clip(CircleShape)
+                                .background(accentColor)
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            currentPhoto.colorName,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = accentColor
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(dominantColor)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            "Dominant ${currentPhoto.dominantColorHex.uppercase()}",
+                            fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.45f)
+                        )
+                    }
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(dateStr, fontSize = 13.sp, color = Color.White.copy(alpha = 0.85f))
-                if (currentPhoto.locationName != null) {
-                    Spacer(Modifier.height(3.dp))
+
+                // Line 2: Date
+                Text(
+                    dateStr,
+                    fontSize = 13.sp,
+                    color = Color.White.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                // Line 3: Location (empty space reserved when absent)
+                if (!currentPhoto.locationName.isNullOrBlank()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Default.LocationOn,
@@ -324,24 +421,129 @@ fun PhotoViewerScreen(
                         Text(
                             currentPhoto.locationName,
                             fontSize = 13.sp,
-                            color = Color.White.copy(alpha = 0.7f)
+                            color = Color.White.copy(alpha = 0.7f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
+                } else {
+                    // Reserved line — keeps card height stable
+                    Spacer(Modifier.height(16.dp))
                 }
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
+
+                // Line 4: Caption — editable inline, add prompt when empty
+                if (editingNote) {
+                    LaunchedEffect(Unit) { noteFocusRequester.requestFocus() }
+                    BasicTextField(
+                        value = draftNote,
+                        onValueChange = { draftNote = it },
+                        textStyle = TextStyle(
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp
+                        ),
+                        cursorBrush = SolidColor(accentColor),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { commitNote() }),
                         modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(parseAccentHex(currentPhoto.dominantColorHex))
+                            .fillMaxWidth()
+                            .focusRequester(noteFocusRequester),
+                        decorationBox = { inner ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.White.copy(alpha = 0.08f))
+                                    .padding(horizontal = 10.dp, vertical = 7.dp)
+                            ) {
+                                if (draftNote.isEmpty()) {
+                                    Text(
+                                        "Write a note about this moment…",
+                                        color = Color.White.copy(alpha = 0.3f),
+                                        fontSize = 13.sp,
+                                        fontStyle = FontStyle.Italic
+                                    )
+                                }
+                                inner()
+                            }
+                        }
                     )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "Dominant ${currentPhoto.dominantColorHex}",
-                        fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.4f)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = { editingNote = false; focusManager.clearFocus() },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = Color.White.copy(alpha = 0.45f)
+                            )
+                        ) { Text("Cancel", fontSize = 12.sp) }
+                        TextButton(
+                            onClick = { commitNote() },
+                            colors = ButtonDefaults.textButtonColors(contentColor = accentColor)
+                        ) { Text("Save", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) }
+                    }
+                } else {
+                    val caption = currentPhoto.description
+                    if (!caption.isNullOrBlank()) {
+                        Column {
+                            Text(
+                                text = caption,
+                                fontSize = 13.sp,
+                                color = Color.White.copy(alpha = 0.8f),
+                                lineHeight = 19.sp,
+                                maxLines = if (captionExpanded) Int.MAX_VALUE else 1,
+                                overflow = if (captionExpanded) TextOverflow.Clip else TextOverflow.Ellipsis,
+                                onTextLayout = { layout ->
+                                    if (!captionExpanded) captionOverflows = layout.hasVisualOverflow
+                                },
+                                modifier = Modifier.clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { editingNote = true; draftNote = caption }
+                            )
+                            if (captionOverflows || captionExpanded) {
+                                Text(
+                                    text = if (captionExpanded) "Show less" else "Show more",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = accentColor,
+                                    modifier = Modifier.clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) { captionExpanded = !captionExpanded }
+                                )
+                            }
+                        }
+                    } else {
+                        // No note yet — tappable "Add a note…" prompt
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White.copy(alpha = 0.06f))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { editingNote = true; draftNote = "" }
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Add a note…",
+                                fontSize = 13.sp,
+                                color = Color.White.copy(alpha = 0.3f),
+                                fontStyle = FontStyle.Italic,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                Icons.Default.EditNote,
+                                contentDescription = "Add note",
+                                tint = Color.White.copy(alpha = 0.2f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

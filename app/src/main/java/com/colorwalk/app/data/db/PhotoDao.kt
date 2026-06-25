@@ -37,6 +37,9 @@ interface PhotoDao {
     @Query("UPDATE photos SET filePath = :newPath WHERE id = :id")
     suspend fun updateFilePath(id: Long, newPath: String)
 
+    @Query("UPDATE photos SET description = :description WHERE id = :id")
+    suspend fun updateDescription(id: Long, description: String?)
+
     @Query("UPDATE photos SET latitude = :lat, longitude = :lon, locationName = :name WHERE id = :id")
     suspend fun updateLocation(id: Long, lat: Double?, lon: Double?, name: String?)
 

@@ -358,4 +358,55 @@ class PhotoDaoTest {
         assertNotNull("Start-of-tomorrow photo must be found in tomorrow's window", tomorrowResult)
         assertEquals(startOfTomorrow, tomorrowResult)
     }
+
+    // ── updateDescription ─────────────────────────────────────────────────────
+
+    @Test
+    fun updateDescription_setsDescriptionOnCorrectRow() = runTest {
+        val id = dao.insert(makeEntity())
+        dao.updateDescription(id, "A bright red door")
+
+        val photos = dao.getAllPhotosSnapshot()
+        assertEquals("A bright red door", photos.first { it.id == id }.description)
+    }
+
+    @Test
+    fun updateDescription_withNullText_clearsDescription() = runTest {
+        val id = dao.insert(makeEntity())
+        dao.updateDescription(id, "initial note")
+        dao.updateDescription(id, null)
+
+        val photos = dao.getAllPhotosSnapshot()
+        assertNull(photos.first { it.id == id }.description)
+    }
+
+    @Test
+    fun updateDescription_doesNotAffectOtherRows() = runTest {
+        val id1 = dao.insert(makeEntity(filePath = "file:///photos/a.jpg"))
+        val id2 = dao.insert(makeEntity(filePath = "file:///photos/b.jpg"))
+
+        dao.updateDescription(id1, "only this one")
+
+        val photos = dao.getAllPhotosSnapshot()
+        assertEquals("only this one", photos.first { it.id == id1 }.description)
+        assertNull("Other row must remain untouched", photos.first { it.id == id2 }.description)
+    }
+
+    @Test
+    fun updateDescription_overwritesExistingNote() = runTest {
+        val id = dao.insert(makeEntity())
+        dao.updateDescription(id, "first draft")
+        dao.updateDescription(id, "updated note")
+
+        val photos = dao.getAllPhotosSnapshot()
+        assertEquals("updated note", photos.first { it.id == id }.description)
+    }
+
+    @Test
+    fun insertPhoto_descriptionDefaultsToNull() = runTest {
+        val id = dao.insert(makeEntity())
+
+        val photos = dao.getAllPhotosSnapshot()
+        assertNull("New photos must have null description", photos.first { it.id == id }.description)
+    }
 }

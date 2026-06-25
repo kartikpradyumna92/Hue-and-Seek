@@ -3,6 +3,7 @@ package com.colorwalk.app.viewmodel
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.data.repository.PhotoRepository
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.WalkColor
@@ -11,7 +12,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -37,6 +41,11 @@ class HomeViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(HomeUiState())
     val state: StateFlow<HomeUiState> = _state
+
+    // Three most recent photos — drives the newsfeed peek strip on Home.
+    val recentPhotos: StateFlow<List<PhotoEntity>> = repo.getAllPhotos()
+        .map { it.take(3) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var loadJob: Job? = null
 

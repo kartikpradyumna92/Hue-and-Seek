@@ -13,5 +13,6 @@ data class PhotoEntity(
     val latitude: Double?,
     val longitude: Double?,
     val locationName: String?,   // reverse-geocoded label
-    val dominantColorHex: String // actual dominant color of the captured photo
+    val dominantColorHex: String, // actual dominant color of the captured photo
+    val description: String? = null  // user-written note; also written to EXIF ImageDescription
 )

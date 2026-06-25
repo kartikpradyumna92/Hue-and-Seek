@@ -22,6 +22,7 @@ import com.colorwalk.app.notification.NotificationPrefs
 import com.colorwalk.app.ui.camera.CameraScreen
 import com.colorwalk.app.ui.gallery.GalleryScreen
 import com.colorwalk.app.ui.home.HomeScreen
+import com.colorwalk.app.ui.newsfeed.NewsfeedScreen
 import com.colorwalk.app.ui.onboarding.OnboardingScreen
 import com.colorwalk.app.ui.permission.PermissionRationaleScreen
 import com.colorwalk.app.ui.settings.SettingsScreen
@@ -43,18 +44,6 @@ class MainActivity : ComponentActivity() {
         NotificationHelper.createChannel(this)
         _themeMode = NotificationPrefs.getThemeMode(this)
         if (NotificationPrefs.isEnabled(this)) AlarmScheduler.scheduleBoth(this)
-
-        // A4: ACCESS_MEDIA_LOCATION shows no dialog — the system grants it silently
-        // when the app already has photo access, but only if actually requested.
-        // Existing users never revisit the permissions screen, so request it here.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_MEDIA_LOCATION)
-                != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(
-                this, arrayOf(Manifest.permission.ACCESS_MEDIA_LOCATION), 0
-            )
-        }
 
         setContent {
             ColorWalkTheme(themeMode = _themeMode) {
@@ -155,11 +144,30 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
         }
 
         composable("home") {
+            // A4: ACCESS_MEDIA_LOCATION is silently granted alongside photo access but
+            // must be explicitly requested. Deferred here so it never fires before the
+            // onboarding or "Before we begin" permission rationale screen is shown.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val activity = context as? android.app.Activity
+                LaunchedEffect(Unit) {
+                    if (activity != null &&
+                        ContextCompat.checkSelfPermission(
+                            context, Manifest.permission.ACCESS_MEDIA_LOCATION
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        ActivityCompat.requestPermissions(
+                            activity, arrayOf(Manifest.permission.ACCESS_MEDIA_LOCATION), 0
+                        )
+                    }
+                }
+            }
+
             HomeScreen(
-                onOpenCamera   = { navController.navigate("camera") },
-                onOpenGallery  = { navController.navigate("gallery") },
-                onOpenSettings = { navController.navigate("settings") },
-                onOpenStats    = { navController.navigate("stats") }
+                onOpenCamera    = { navController.navigate("camera") },
+                onOpenGallery   = { navController.navigate("gallery") },
+                onOpenSettings  = { navController.navigate("settings") },
+                onOpenStats     = { navController.navigate("stats") },
+                onOpenNewsfeed  = { navController.navigate("newsfeed") }
             )
         }
 
@@ -180,6 +188,10 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
 
         composable("stats") {
             StatsScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable("newsfeed") {
+            NewsfeedScreen(onBack = { navController.popBackStack() })
         }
     }
 }

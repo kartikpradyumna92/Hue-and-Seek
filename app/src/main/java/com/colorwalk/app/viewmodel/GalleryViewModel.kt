@@ -237,6 +237,19 @@ class GalleryViewModel @Inject constructor(
 
     fun closePhoto() { _viewerState.value = null }
 
+    fun saveDescription(photo: PhotoEntity, text: String?) {
+        viewModelScope.launch {
+            repo.saveDescription(photo, text)
+            // Patch the viewer snapshot immediately so the note appears without
+            // waiting for Room to re-emit through the full allPhotos flow.
+            val vs = _viewerState.value ?: return@launch
+            val stored = text?.trim()?.ifBlank { null }
+            _viewerState.value = vs.copy(
+                photos = vs.photos.map { if (it.id == photo.id) it.copy(description = stored) else it }
+            )
+        }
+    }
+
     fun rotatePhoto(photo: PhotoEntity, onDone: () -> Unit) {
         viewModelScope.launch {
             repo.rotatePhoto(photo)

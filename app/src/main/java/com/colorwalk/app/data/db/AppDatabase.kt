@@ -4,15 +4,23 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 // SCHEMA CHANGE RULE: increment `version` + add a Migration object below.
 // Never use fallbackToDestructiveMigration — it silently wipes all user data (streak + photos).
-@Database(entities = [PhotoEntity::class], version = 1, exportSchema = true)
+@Database(entities = [PhotoEntity::class], version = 2, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
+
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE photos ADD COLUMN description TEXT")
+            }
+        }
 
         fun getInstance(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
@@ -21,7 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "colorwalk.db"
                 )
-                // Add Migration(oldVer, newVer) { ... } objects here on every schema change.
+                .addMigrations(MIGRATION_1_2)
                 // TRUNCATE keeps everything in the single .db file: Auto Backup snapshots
                 // the files independently, so a .db/.db-wal pair from different moments
                 // restores an inconsistent database (B10). Write volume here is a few

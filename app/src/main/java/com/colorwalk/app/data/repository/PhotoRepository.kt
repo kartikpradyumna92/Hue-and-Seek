@@ -60,6 +60,81 @@ class PhotoRepository @Inject constructor(
     fun getPhotosByColor(colorName: String): Flow<List<PhotoEntity>> = dao.getPhotosByColor(colorName)
     fun getDistinctColors(): Flow<List<ColorSummary>> = dao.getDistinctColors()
 
+    /**
+     * Persists a user-written description to the DB, to the private JPEG file,
+     * and to the matching MediaStore copy so Google Photos picks up the note
+     * regardless of when the user adds or edits it.
+     */
+    suspend fun saveDescription(photo: PhotoEntity, text: String?) = withContext(Dispatchers.IO) {
+        val trimmed = text?.trim()?.ifBlank { null }
+        dao.updateDescription(photo.id, trimmed)
+
+        val tag = trimmed ?: ""
+
+        // 1. Write to the private file.
+        if (photo.filePath.startsWith("/")) {
+            try {
+                val exif = ExifInterface(photo.filePath)
+                exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, tag)
+                exif.saveAttributes()
+            } catch (_: Exception) { }
+        }
+
+        // 2. Write to the MediaStore copy so Google Photos sees the updated EXIF
+        //    even if it already backed up an earlier version of the file.
+        val filename = resolveFilename(photo.filePath)
+        if (filename != null && filename.startsWith("ColorWalk_")) {
+            writeDescriptionToMediaStore(filename, tag)
+        }
+    }
+
+    /**
+     * Finds the MediaStore entry for [filename] and writes [description] to its
+     * EXIF ImageDescription tag in-place using a writable file descriptor.
+     * No-op if the entry doesn't exist or isn't writable (e.g. owned by a different UID).
+     */
+    private fun writeDescriptionToMediaStore(filename: String, description: String) {
+        val resolver = context.contentResolver
+        val selection = "${MediaStore.Images.Media.DISPLAY_NAME} = ?"
+        val cursor = try {
+            resolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media._ID),
+                selection,
+                arrayOf(filename),
+                null
+            )
+        } catch (_: Exception) { return }
+
+        val uri = cursor?.use { c ->
+            if (c.moveToFirst())
+                ContentUris.withAppendedId(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    c.getLong(0)
+                )
+            else null
+        } ?: return
+
+        try {
+            // IS_PENDING must be set to 1 before editing on API 29+ to get write access.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val pending = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 1) }
+                resolver.update(uri, pending, null, null)
+            }
+            resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                val exif = ExifInterface(pfd.fileDescriptor)
+                exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description)
+                exif.saveAttributes()
+            }
+        } catch (_: Exception) {
+        } finally {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val notPending = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                try { resolver.update(uri, notPending, null, null) } catch (_: Exception) { }
+            }
+        }
+    }
+
     suspend fun getAllPhotosSnapshot(): List<PhotoEntity> = withContext(Dispatchers.IO) {
         dao.getAllPhotosSnapshot()
     }
@@ -222,7 +297,7 @@ class PhotoRepository @Inject constructor(
             DeletionTombstones.clear(context, filename, now)
             // Reverse geocoding hits the network — the success card must not wait on it.
             resolveLocationNameAsync(id, lat, lon)
-            SaveResult.Success(Uri.fromFile(privateFile), validation)
+            SaveResult.Success(Uri.fromFile(privateFile), validation, id)
         }
 
     /** Imports a photo from device gallery. Only indexes if taken today + color passes. */
@@ -267,7 +342,7 @@ class PhotoRepository @Inject constructor(
             // any matching tombstone so future syncs can recover it again.
             DeletionTombstones.clear(context, filename, dateTaken)
             resolveLocationNameAsync(id, lat, lon)
-            ImportResult.Success(Uri.fromFile(privateFile), validation)
+            ImportResult.Success(Uri.fromFile(privateFile), validation, id)
         }
 
     /**
@@ -448,6 +523,15 @@ class PhotoRepository @Inject constructor(
                 // Genuinely new photo — recover it (fresh reinstall, or first sync).
                 val privateFile = copyMediaUriToPrivateStorage(name, mediaUri)
                 val color = colorForDay(dateTaken)
+                // Recover description from EXIF so a reinstall doesn't lose notes the
+                // user wrote before (the JPEG in Google Photos carries the tag).
+                val recoveredDescription = privateFile?.let {
+                    try {
+                        ExifInterface(it.absolutePath)
+                            .getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION)
+                            ?.trim()?.ifBlank { null }
+                    } catch (_: Exception) { null }
+                }
                 pass2Inserts.add(
                     PhotoEntity(
                         filePath = privateFile?.absolutePath ?: mediaUri.toString(),
@@ -457,7 +541,8 @@ class PhotoRepository @Inject constructor(
                         latitude = null,
                         longitude = null,
                         locationName = null,
-                        dominantColorHex = color.hex
+                        dominantColorHex = color.hex,
+                        description = recoveredDescription
                     )
                 )
                 existingTimestamps.add(dateTaken)
@@ -867,13 +952,13 @@ class PhotoRepository @Inject constructor(
 }
 
 sealed class SaveResult {
-    data class Success(val uri: Uri, val validation: ColorValidator.ValidationResult) : SaveResult()
+    data class Success(val uri: Uri, val validation: ColorValidator.ValidationResult, val photoId: Long) : SaveResult()
     data class ValidationFailed(val validation: ColorValidator.ValidationResult) : SaveResult()
     object StorageError : SaveResult()
 }
 
 sealed class ImportResult {
-    data class Success(val uri: Uri, val validation: ColorValidator.ValidationResult) : ImportResult()
+    data class Success(val uri: Uri, val validation: ColorValidator.ValidationResult, val photoId: Long) : ImportResult()
     data class ValidationFailed(val validation: ColorValidator.ValidationResult) : ImportResult()
     object NoDateMetadata : ImportResult()
     data class NotTakenToday(val dateTaken: Long) : ImportResult()
