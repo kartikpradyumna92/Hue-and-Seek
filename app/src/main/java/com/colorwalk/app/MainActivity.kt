@@ -10,7 +10,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.runtime.*
+import androidx.compose.ui.unit.IntOffset
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
@@ -19,18 +23,22 @@ import androidx.navigation.compose.rememberNavController
 import com.colorwalk.app.notification.AlarmScheduler
 import com.colorwalk.app.notification.NotificationHelper
 import com.colorwalk.app.notification.NotificationPrefs
-import com.colorwalk.app.ui.camera.CameraScreen
-import com.colorwalk.app.ui.gallery.GalleryScreen
-import com.colorwalk.app.ui.home.HomeScreen
-import com.colorwalk.app.ui.newsfeed.NewsfeedScreen
+import com.colorwalk.app.ui.home.HomeHubScreen
 import com.colorwalk.app.ui.onboarding.OnboardingScreen
 import com.colorwalk.app.ui.permission.PermissionRationaleScreen
-import com.colorwalk.app.ui.settings.SettingsScreen
 import com.colorwalk.app.ui.stats.StatsScreen
 import com.colorwalk.app.ui.theme.ColorWalkTheme
 import com.colorwalk.app.ui.theme.ThemeMode
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import dagger.hilt.android.AndroidEntryPoint
+
+// Stats slides over the hub on a physical spring — damping just under critical for a
+// hint of life at the end of travel, no scripted duration.
+private val NAV_SLIDE_SPRING = spring(
+    dampingRatio = 0.85f,
+    stiffness = 380f,
+    visibilityThreshold = IntOffset.VisibilityThreshold
+)
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -162,36 +170,21 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
                 }
             }
 
-            HomeScreen(
-                onOpenCamera    = { navController.navigate("camera") },
-                onOpenGallery   = { navController.navigate("gallery") },
-                onOpenSettings  = { navController.navigate("settings") },
-                onOpenStats     = { navController.navigate("stats") },
-                onOpenNewsfeed  = { navController.navigate("newsfeed") }
+            // Camera, Gallery, Settings, and Newsfeed are all swipe-neighbors of Home,
+            // hosted inside this single route — see HomeHubScreen for why none of this
+            // uses NavHost destinations.
+            HomeHubScreen(
+                onOpenStats    = { navController.navigate("stats") },
+                onThemeChange  = onThemeChange
             )
         }
 
-        composable("camera") {
-            CameraScreen(onBack = { navController.popBackStack() })
-        }
-
-        composable("gallery") {
-            GalleryScreen(onBack = { navController.popBackStack() })
-        }
-
-        composable("settings") {
-            SettingsScreen(
-                onBack        = { navController.popBackStack() },
-                onThemeChange = onThemeChange
-            )
-        }
-
-        composable("stats") {
+        composable(
+            "stats",
+            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Up, NAV_SLIDE_SPRING) },
+            popExitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Down, NAV_SLIDE_SPRING) }
+        ) {
             StatsScreen(onBack = { navController.popBackStack() })
-        }
-
-        composable("newsfeed") {
-            NewsfeedScreen(onBack = { navController.popBackStack() })
         }
     }
 }

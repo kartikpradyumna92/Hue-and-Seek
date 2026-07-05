@@ -78,6 +78,7 @@ Play Console allows up to 8 phone screenshots. Upload them in this order:
 - Screenshot 7 (Permissions "Before we begin") — users don't need to see a permission dialog as a selling point.
 
 ### How to capture the missing camera screenshot
+**Status: still needs a real device/emulator — no ADB or emulator available in this environment, this has to be captured on your phone.**
 1. Open the app on your phone
 2. Navigate to the Camera screen
 3. Aim at something clearly yellow (today's color) so the color hint pill is visible
@@ -87,28 +88,13 @@ Play Console allows up to 8 phone screenshots. Upload them in this order:
 ---
 
 ## App icon — 512×512 PNG
-**Status: STILL NEEDED — must create manually.**
+**Status: ✅ Done — `docs/store-assets/icon-512.png`**
 
-Requirements:
-- 512 × 512 pixels, PNG, no alpha channel (flatten to white background if needed)
-- No rounded corners — Google Play applies the shape mask automatically
-
-The current launcher icon uses a flame on a dark maroon background with an orange-to-purple gradient.
-To generate the 512×512 version:
-- In Android Studio: `File → New → Image Asset` → set foreground to `ic_launcher_foreground`, background to `#4A1010` (dark maroon), export at 512×512
-- Or: export the flame SVG asset from `res/drawable/` at 512×512 using any vector editor (Figma, Inkscape)
+Rendered directly from the actual current launcher vectors (`ic_launcher_foreground.xml` + `ic_launcher_background.xml` — a white camera glyph with 4 color dots on deep indigo `#3949AB`), not the flame/maroon design this doc previously described (that was stale — the icon was redesigned since this doc was written). 512×512, RGB, no alpha channel, no rounded corners (Play applies the shape mask).
 
 ---
 
 ## Feature graphic — 1024×500 PNG
-**Status: STILL NEEDED — must create manually.**
+**Status: ✅ Done — `docs/store-assets/feature-graphic-1024x500.png`**
 
-Requirements: 1024 × 500 pixels, JPEG or 24-bit PNG. Shown at the top of your Play Store listing on phones and at the top of the store page on tablets.
-
-Suggested layout (simple, matches app aesthetic):
-- Background: dark (`#0D0D0D` or the maroon `#4A1010`)
-- Left half: app icon (flame, ~200×200px) centered vertically
-- Right half: "Hue & Seek" in the gradient title font (or white bold), with tagline below in gray: "Hunt today's color. Build your streak."
-- Accent: a horizontal row of 8 colored dots (the 8 walk colors) across the bottom third
-
-Tools: Figma (free), Canva, or any image editor. Do not include text that duplicates the app name (Google may reject it if it's too small to read at thumbnail size).
+1024×500, RGB PNG. Same indigo palette as the real icon (not maroon), the actual camera glyph in a rounded badge on the left, "Hue & Seek" + tagline on the right, and a row of the 8 actual `WalkColor` hex values across the bottom — every color sampled from `domain/WalkColor.kt`, not approximated.

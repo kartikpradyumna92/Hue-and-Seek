@@ -41,8 +41,10 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.ui.components.ZoomableAsyncImage
 import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.photoImageRequest
+import com.colorwalk.app.ui.components.rememberZoomState
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.viewmodel.StatsUiState
 import com.colorwalk.app.viewmodel.StatsViewModel
@@ -592,6 +594,8 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
         SimpleDateFormat("EEEE, MMMM d, yyyy  •  h:mm a", Locale.getDefault())
             .format(Date(currentPhoto.dateTaken))
     }
+    // Reset zoom whenever the visible page changes, same as the gallery viewer.
+    val zoomState = rememberZoomState(resetKey = pagerState.currentPage)
 
     Column(
         modifier = Modifier
@@ -600,13 +604,15 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
     ) {
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            userScrollEnabled = zoomState.scale == 1f
         ) { page ->
             val photo = photos[page]
             val pageAccent = parseAccentHex(photo.colorHex)
-            AsyncImage(
+            ZoomableAsyncImage(
                 model = photoImageRequest(context, photo.filePath),
                 contentDescription = "${photo.colorName} photo",
+                state = zoomState,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxWidth()

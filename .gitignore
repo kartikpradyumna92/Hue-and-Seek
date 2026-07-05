@@ -1,6 +1,11 @@
 # Local machine config — never commit
 local.properties
 
+# Release signing credentials — never commit
+keystore.properties
+*.jks
+*.keystore
+
 # Build outputs
 app/build/
 build/
@@ -10,7 +15,6 @@ build/
 
 # Gradle cache
 .gradle/
-gradle/wrapper/gradle-wrapper.jar
 
 # IDE files
 .idea/
@@ -31,3 +35,6 @@ Thumbs.db
 # Local project notes — not for version control
 TODO.txt
 BUGS_TODO.txt
+
+# Serena tool cache
+.serena/

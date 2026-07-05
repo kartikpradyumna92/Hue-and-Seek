@@ -1,11 +1,15 @@
 package com.colorwalk.app.domain
 
 import android.graphics.Bitmap
+import kotlin.math.exp
+import kotlin.math.min
 
 /**
- * Validates that the day's target color genuinely dominates a photo.
+ * Validates that the day's target color genuinely stars in a photo.
  *
- * Algorithm — deterministic HSV-band histogram:
+ * Two independent ways to pass:
+ *
+ * **Path 1 — global dominance** (the original rule, spatially refined):
  *  1. Downscale to [SAMPLE_SIZE] × [SAMPLE_SIZE].
  *  2. Drop neutral pixels (too dark or too gray) — they never count toward any color.
  *  3. Classify every remaining pixel into exactly ONE walk color. The hue wheel is
@@ -13,12 +17,26 @@ import android.graphics.Bitmap
  *     depend on the order colors are checked in. Brown is separated from Orange by
  *     brightness — brown *is* dark/muted orange — and washed-out light reds count as
  *     Pink.
- *  4. Pixels in the central half of the frame are weighted ×2: the daily color should
- *     be the photo's subject, and subjects sit near the center.
- *  5. Pass only if the target color (a) has the highest weighted count of all walk
- *     colors AND (b) covers at least [MIN_TARGET_SHARE] of the whole weighted frame —
- *     beating the other colors in an otherwise gray scene is not enough; the color has
- *     to visibly pop.
+ *  4. Every pixel is weighted by a smooth 2-D Gaussian centered on the frame
+ *     (center ≈ ×3, edges ≈ ×1) — the subject of a photo sits near the middle, and a
+ *     smooth falloff avoids the hard cliff of the old binary center-box ×2 scheme.
+ *  5. Pass if the target color (a) has the highest weighted count of all walk colors
+ *     AND (b) covers at least [MIN_TARGET_SHARE] of the whole weighted frame.
+ *
+ * **Path 2 — subject saliency** (small-subject isolation): a modest object — a red
+ * mailbox against a whole green garden — should pass without the user cramming it
+ * into the entire frame. Checked only when Path 1 fails:
+ *  1. The target must still hold a non-trivial [MIN_SUBJECT_GLOBAL_SHARE] of the
+ *     weighted frame, so a stray speck can never pass.
+ *  2. Five focal windows are examined — frame center plus the four rule-of-thirds
+ *     intersections, each a Gaussian window of radius [FOCAL_RADIUS_FRACTION]·min(w,h).
+ *  3. Within a window, target pixels whose OKLAB ΔE to the day's reference swatch is
+ *     tighter than [TIGHT_DELTA_E] earn a ×[TIGHT_MATCH_BONUS] weight — a shade that
+ *     truly *is* the day's color counts harder than one that merely lands in the same
+ *     hue bucket ([OkLab]).
+ *  4. Pass if in ANY focal window the target holds ≥ [SUBJECT_FOCAL_SHARE] of the
+ *     window's mass AND beats every other walk color there: the subject owns its
+ *     focal point even though the background owns the frame.
  *
  * Everything below [validate] is pure Kotlin (no Android framework types) so the full
  * classification and pass/fail logic is unit-testable on the JVM.
@@ -32,12 +50,13 @@ object ColorValidator {
         val matchPercent: Float,         // target's weighted share of the WHOLE frame (0..1)
         val actualDominantColor: String, // walk color with the highest count (≥MIN_DOMINANT_SHARE), or NEUTRAL_LABEL
         val nearestColorName: String? = null,  // highest non-target color present (for failure hints)
-        val nearestColorShare: Float = 0f      // its share of the total weighted frame
+        val nearestColorShare: Float = 0f,     // its share of the total weighted frame
+        val subjectMatch: Boolean = false      // true when Path 2 (focal-point subject) granted the pass
     )
 
     private const val SAMPLE_SIZE = 80
 
-    /** Target must cover at least this fraction of the (center-weighted) frame to pass. */
+    /** Target must cover at least this fraction of the (center-weighted) frame to pass globally. */
     internal const val MIN_TARGET_SHARE = 0.15f
 
     /**
@@ -48,6 +67,43 @@ object ColorValidator {
      * of a misleading color name.
      */
     internal const val MIN_DOMINANT_SHARE = 0.05f
+
+    // ── Path 1: global Gaussian spatial weighting ────────────────────────────────
+    // w(x,y) = 1 + GAIN·exp(−(nx²+ny²)/(2σ²)) in coordinates normalized to [−1,1].
+    // Center weight = 1+GAIN = 3; corners ≈ 1. Mirrors the intent of the old binary
+    // ×2 center box, but smooth — a subject straddling the old box edge no longer
+    // loses half its weight to a one-pixel shift.
+    private const val CENTER_GAIN = 2f
+    private const val CENTER_SIGMA = 0.45f
+
+    // ── Path 2: focal-point subject isolation ────────────────────────────────────
+    /** Focal window radius as a fraction of min(width, height). */
+    private const val FOCAL_RADIUS_FRACTION = 0.25f
+
+    /** Floor on the target's global weighted share before Path 2 is even considered. */
+    internal const val MIN_SUBJECT_GLOBAL_SHARE = 0.06f
+
+    /** Share of a focal window's mass the target must own to count as its subject. */
+    internal const val SUBJECT_FOCAL_SHARE = 0.5f
+
+    /**
+     * OKLAB ΔE under which a pixel is a *tight* match for the day's reference swatch.
+     * ~6× the just-noticeable difference: same color family and clearly "that color"
+     * to the eye, while tolerating real-world lighting shifts.
+     */
+    internal const val TIGHT_DELTA_E = 0.12f
+
+    /** Focal-window weight multiplier for tight-ΔE target pixels. */
+    private const val TIGHT_MATCH_BONUS = 1.5
+
+    // Focal points: frame center + the four rule-of-thirds intersections.
+    private val FOCAL_POINTS = arrayOf(
+        floatArrayOf(0.5f, 0.5f),
+        floatArrayOf(1f / 3f, 1f / 3f),
+        floatArrayOf(2f / 3f, 1f / 3f),
+        floatArrayOf(1f / 3f, 2f / 3f),
+        floatArrayOf(2f / 3f, 2f / 3f),
+    )
 
     // Neutral gates — pixels below these are shadow/gray/white and belong to no color.
     // MIN_SATURATION = 0.22: prevents warm-tinted near-neutral surfaces (gray walls/rugs
@@ -82,30 +138,38 @@ object ColorValidator {
         height: Int,
         target: WalkColor
     ): ValidationResult {
-        val weights = LongArray(WALK_COLORS.size)
+        val weights = DoubleArray(WALK_COLORS.size)
         // Per-bucket RGB sums so the displayed "dominant" hex is the actual average
         // shade the user photographed, not a reference swatch.
-        val rSum = LongArray(WALK_COLORS.size)
-        val gSum = LongArray(WALK_COLORS.size)
-        val bSum = LongArray(WALK_COLORS.size)
-        var totalWeight = 0L
+        val rSum = DoubleArray(WALK_COLORS.size)
+        val gSum = DoubleArray(WALK_COLORS.size)
+        val bSum = DoubleArray(WALK_COLORS.size)
+        var totalWeight = 0.0
 
-        val cxMin = width / 4
-        val cxMax = width * 3 / 4
-        val cyMin = height / 4
-        val cyMax = height * 3 / 4
+        // Per-pixel bucket, kept for the focal-window pass (-1 = neutral).
+        val classIdx = IntArray(width * height)
+
+        val cx = (width - 1) / 2f
+        val cy = (height - 1) / 2f
+        val halfW = width / 2f
+        val halfH = height / 2f
+        val twoSigmaSq = 2f * CENTER_SIGMA * CENTER_SIGMA
 
         val hsv = FloatArray(3)
         for (y in 0 until height) {
-            val centerRow = y in cyMin until cyMax
+            val ny = (y - cy) / halfH
             for (x in 0 until width) {
-                val px = pixels[y * width + x]
-                val w = if (centerRow && x in cxMin until cxMax) 2L else 1L
+                val i = y * width + x
+                val px = pixels[i]
+                val nx = (x - cx) / halfW
+                val w = 1.0 + CENTER_GAIN * exp(-((nx * nx + ny * ny) / twoSigmaSq).toDouble())
                 totalWeight += w
                 val r = (px shr 16) and 0xFF
                 val g = (px shr 8) and 0xFF
                 val b = px and 0xFF
-                val idx = classifyRgb(r, g, b, hsv) ?: continue
+                val idx = classifyRgb(r, g, b, hsv)
+                classIdx[i] = idx ?: -1
+                if (idx == null) continue
                 weights[idx] += w
                 rSum[idx] += w * r
                 gSum[idx] += w * g
@@ -114,18 +178,25 @@ object ColorValidator {
         }
 
         val targetIdx = WALK_COLORS.indexOfFirst { it.name == target.name }
-        val targetWeight = if (targetIdx >= 0) weights[targetIdx] else 0L
+        val targetWeight = if (targetIdx >= 0) weights[targetIdx] else 0.0
         val maxWeight = weights.max()
-        val targetShare = if (totalWeight > 0) targetWeight.toFloat() / totalWeight else 0f
+        val targetShare = if (totalWeight > 0) (targetWeight / totalWeight).toFloat() else 0f
 
-        val passed = targetWeight > 0 &&
+        val globalPass = targetWeight > 0 &&
                 targetWeight == maxWeight &&
                 targetShare >= MIN_TARGET_SHARE
+
+        // Path 2 only matters when global dominance failed.
+        val subjectMatch = !globalPass && targetIdx >= 0 &&
+                targetShare >= MIN_SUBJECT_GLOBAL_SHARE &&
+                hasFocalSubject(pixels, classIdx, width, height, targetIdx)
+
+        val passed = globalPass || subjectMatch
 
         // A color must hold at least MIN_DOMINANT_SHARE of the total weighted frame
         // to be named "dominant". Without this gate, 2–3% of warm-tinted neutral
         // pixels (e.g. a gray rug under incandescent light) falsely claim dominance.
-        val dominantShare = if (totalWeight > 0) maxWeight.toFloat() / totalWeight else 0f
+        val dominantShare = if (totalWeight > 0) (maxWeight / totalWeight).toFloat() else 0f
         val dominantIdx = if (maxWeight > 0 && dominantShare >= MIN_DOMINANT_SHARE)
             weights.indexOfFirst { it == maxWeight } else -1
 
@@ -136,9 +207,9 @@ object ColorValidator {
             val n = weights[dominantIdx]
             dominantHex = String.format(
                 "#%02X%02X%02X",
-                (rSum[dominantIdx] / n).toInt(),
-                (gSum[dominantIdx] / n).toInt(),
-                (bSum[dominantIdx] / n).toInt()
+                Math.round(rSum[dominantIdx] / n).toInt(),
+                Math.round(gSum[dominantIdx] / n).toInt(),
+                Math.round(bSum[dominantIdx] / n).toInt()
             )
         } else {
             dominantName = NEUTRAL_LABEL
@@ -151,7 +222,7 @@ object ColorValidator {
         var nearestShare = 0f
         for (i in weights.indices) {
             if (i == targetIdx) continue
-            val share = if (totalWeight > 0) weights[i].toFloat() / totalWeight else 0f
+            val share = if (totalWeight > 0) (weights[i] / totalWeight).toFloat() else 0f
             if (share > nearestShare) { nearestShare = share; nearestName = WALK_COLORS[i].name }
         }
 
@@ -162,8 +233,126 @@ object ColorValidator {
             matchPercent = targetShare,
             actualDominantColor = dominantName,
             nearestColorName = if (nearestShare >= MIN_DOMINANT_SHARE) nearestName else null,
-            nearestColorShare = nearestShare
+            nearestColorShare = nearestShare,
+            subjectMatch = subjectMatch
         )
+    }
+
+    /**
+     * Path 2 core: does any focal window contain a cluster where the target owns
+     * ≥ [SUBJECT_FOCAL_SHARE] of the mass and beats every other walk color?
+     *
+     * Window mass is Gaussian around the focal point (σ = radius/2), so pixels at the
+     * exact focal point matter most and influence fades smoothly — an off-center
+     * subject partially overlapping a window is scored proportionally, with no hard
+     * cutoff. Target pixels within [TIGHT_DELTA_E] of the day's reference swatch in
+     * OKLAB earn [TIGHT_MATCH_BONUS]; the bonus raises both the target's mass and the
+     * window total, so a window share can never exceed 1.
+     */
+    private fun hasFocalSubject(
+        pixels: IntArray,
+        classIdx: IntArray,
+        width: Int,
+        height: Int,
+        targetIdx: Int
+    ): Boolean {
+        val radius = FOCAL_RADIUS_FRACTION * min(width, height)
+        if (radius < 1f) return false
+        val sigma = radius / 2f
+        val twoSigmaSq = (2f * sigma * sigma).toDouble()
+        val reach = 2f * radius // beyond 4σ the Gaussian is ~0; bound the pixel loop
+
+        val targetLab = WALK_COLORS[targetIdx].hex.removePrefix("#").toInt(16).let {
+            OkLab.fromSrgb((it shr 16) and 0xFF, (it shr 8) and 0xFF, it and 0xFF)
+        }
+        val pixelLab = FloatArray(3)
+        val colorMass = DoubleArray(WALK_COLORS.size)
+
+        for (focal in FOCAL_POINTS) {
+            val fx = focal[0] * (width - 1)
+            val fy = focal[1] * (height - 1)
+            val x0 = (fx - reach).toInt().coerceAtLeast(0)
+            val x1 = (fx + reach).toInt().coerceAtMost(width - 1)
+            val y0 = (fy - reach).toInt().coerceAtLeast(0)
+            val y1 = (fy + reach).toInt().coerceAtMost(height - 1)
+
+            java.util.Arrays.fill(colorMass, 0.0)
+            var totalMass = 0.0
+
+            for (y in y0..y1) {
+                val dy = y - fy
+                for (x in x0..x1) {
+                    val dx = x - fx
+                    val fw = exp(-((dx * dx + dy * dy) / twoSigmaSq))
+                    if (fw < 1e-3) continue
+                    val i = y * width + x
+                    val idx = classIdx[i]
+                    var contribution = fw
+                    if (idx == targetIdx) {
+                        val px = pixels[i]
+                        OkLab.fromSrgb((px shr 16) and 0xFF, (px shr 8) and 0xFF, px and 0xFF, pixelLab)
+                        if (OkLab.deltaE(pixelLab, targetLab) < TIGHT_DELTA_E) {
+                            contribution *= TIGHT_MATCH_BONUS
+                        }
+                    }
+                    totalMass += contribution
+                    if (idx >= 0) colorMass[idx] += contribution
+                }
+            }
+
+            if (totalMass <= 0.0) continue
+            val targetMass = colorMass[targetIdx]
+            val share = targetMass / totalMass
+            if (share >= SUBJECT_FOCAL_SHARE && targetMass == colorMass.max()) return true
+        }
+        return false
+    }
+
+    /**
+     * Live-viewfinder fast path: the target's Gaussian-weighted share of the frame —
+     * the same spatial math as Path 1 of [validatePixels], stripped to a single
+     * accumulator pair. Allocation-free by design (the caller passes a reusable [hsv]
+     * scratch buffer): this runs on every analyzed camera frame, and any per-frame
+     * allocation here would show up as GC-driven viewfinder stutter.
+     */
+    fun liveTargetShare(
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        target: WalkColor,
+        hsv: FloatArray
+    ): Float {
+        // Indexed lookup, not indexOfFirst: this runs per camera frame and a list
+        // iterator per call is exactly the kind of steady-state garbage the live
+        // path exists to avoid.
+        var targetIdx = -1
+        for (i in 0 until WALK_COLORS.size) {
+            if (WALK_COLORS[i].name == target.name) { targetIdx = i; break }
+        }
+        if (targetIdx < 0) return 0f
+
+        val cx = (width - 1) / 2f
+        val cy = (height - 1) / 2f
+        val halfW = width / 2f
+        val halfH = height / 2f
+        val twoSigmaSq = 2f * CENTER_SIGMA * CENTER_SIGMA
+
+        var targetWeight = 0.0
+        var totalWeight = 0.0
+        for (y in 0 until height) {
+            val ny = (y - cy) / halfH
+            for (x in 0 until width) {
+                val px = pixels[y * width + x]
+                val nx = (x - cx) / halfW
+                val w = 1.0 + CENTER_GAIN * exp(-((nx * nx + ny * ny) / twoSigmaSq).toDouble())
+                totalWeight += w
+                val r = (px shr 16) and 0xFF
+                val g = (px shr 8) and 0xFF
+                val b = px and 0xFF
+                if (classifyRgb(r, g, b, hsv) == targetIdx) targetWeight += w
+            }
+        }
+        return if (totalWeight > 0) (targetWeight / totalWeight).toFloat() else 0f
     }
 
     /** Classifies one ARGB pixel into a walk color, or null for neutral pixels. */

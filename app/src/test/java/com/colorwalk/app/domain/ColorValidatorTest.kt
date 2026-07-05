@@ -222,11 +222,12 @@ class ColorValidatorTest {
 
     @Test
     fun validatePixels_colorAboveDominantThreshold_showsColorNotNeutral() {
-        // 10×10 frame: totalWeight = 125 (center 5×5 at weight 2, outer 75 at weight 1).
-        // 8 edge pixels (weight 1 each) → share = 8/125 = 6.4% > MIN_DOMINANT_SHARE (5%):
-        // the dominant label should name the color, not "Neutral tones".
+        // 10 top-edge pixels of a 10×10 gray frame are red — comfortably above
+        // MIN_DOMINANT_SHARE (5%) of the Gaussian-weighted frame even though edge
+        // pixels carry the lowest spatial weight: the dominant label should name the
+        // color, not "Neutral tones".
         val pixels = frame(10, 10, GRAY)
-        for (i in 0 until 8) pixels[i] = PURE_RED
+        for (i in 0 until 10) pixels[i] = PURE_RED
         val result = ColorValidator.validatePixels(pixels, 10, 10, walkColor("Red"))
         assertFalse(result.passed) // still far below MIN_TARGET_SHARE (15%)
         assertEquals("Red", result.actualDominantColor)
@@ -251,18 +252,38 @@ class ColorValidatorTest {
     }
 
     @Test
-    fun validatePixels_targetBeatenByAnotherColor_fails() {
-        // 60% green, 40% red on a Red day → Green dominates.
-        val pixels = IntArray(100) { i -> if (i < 60) GRASS_GREEN else PURE_RED }
-        val result = ColorValidator.validatePixels(pixels, 10, 10, walkColor("Red"))
+    fun validatePixels_scatteredTargetBeatenByAnotherColor_fails() {
+        // 20% red scattered uniformly through 80% green on a Red day: green dominates
+        // globally, and no focal window has a coherent red cluster, so the subject
+        // path can't rescue it either. Scattered specks of the day's color across a
+        // scene are not a "find".
+        val pixels = IntArray(900) { i -> if (i % 5 == 0) PURE_RED else GRASS_GREEN }
+        val result = ColorValidator.validatePixels(pixels, 30, 30, walkColor("Red"))
         assertFalse(result.passed)
+        assertFalse(result.subjectMatch)
         assertEquals("Green", result.actualDominantColor)
     }
 
     @Test
+    fun validatePixels_concentratedTargetRegion_passesViaSubjectPath() {
+        // 60% green (top), 40% red (bottom) on a Red day. Green wins the global
+        // histogram, but the red region runs straight through the lower rule-of-thirds
+        // focal points — a coherent subject, not noise. Under the old fill-the-frame
+        // rule this failed ("Red isn't dominant"); the subject-saliency path now
+        // recognizes it. This test intentionally replaces the old expectation.
+        val pixels = IntArray(900) { i -> if (i / 30 >= 18) PURE_RED else GRASS_GREEN }
+        val result = ColorValidator.validatePixels(pixels, 30, 30, walkColor("Red"))
+        assertTrue("Coherent red region through a focal point must pass", result.passed)
+        assertTrue(result.subjectMatch)
+        assertEquals("Green", result.actualDominantColor) // global histogram is still honest
+    }
+
+    @Test
     fun validatePixels_centerWeighting_subjectInCenterBeatsLargerBackdrop() {
-        // 8×8: center 4×4 (16 px, weight 2 → 32) red; 20 green pixels on the edges
-        // (weight 1 → 20). Center-weighted red wins even though green has more pixels.
+        // 8×8: center 4×4 (16 px) red vs 20 green pixels on the edges. The Gaussian
+        // center weight (≈×3 at the middle, ≈×1 at the corners) makes the centered
+        // red subject win even though green has more raw pixels — same intent as the
+        // old binary ×2 center box, now with a smooth falloff.
         val pixels = frame(8, 8, GRAY)
         var greens = 0
         for (i in pixels.indices) {
@@ -298,6 +319,151 @@ class ColorValidatorTest {
         val result = ColorValidator.validatePixels(pixels, 8, 8, walkColor("Red"))
         assertEquals(0.5f, result.matchPercent, 0.01f)
         assertTrue(result.passed)
+    }
+
+    // ── subject-saliency path (Path 2) ────────────────────────────────────────
+
+    /** Fills a disk of [radius] around ([cx],[cy]) with [color] on a [bg] frame. */
+    private fun diskFrame(size: Int, cx: Int, cy: Int, radius: Int, color: Int, bg: Int): IntArray =
+        IntArray(size * size) { i ->
+            val x = i % size; val y = i / size
+            val dx = x - cx; val dy = y - cy
+            if (dx * dx + dy * dy <= radius * radius) color else bg
+        }
+
+    @Test
+    fun subjectPath_smallCenteredSubjectAgainstDominantBackground_passes() {
+        // The flagship scenario the old rule failed: a red subject covering ~13% of
+        // the frame (mailbox, flower, sign) centered against an overwhelmingly green
+        // scene. Green wins the global histogram, but the subject owns the central
+        // focal window — that's a find, not a miss.
+        val pixels = diskFrame(30, 15, 15, 6, PURE_RED, GRASS_GREEN)
+        val result = ColorValidator.validatePixels(pixels, 30, 30, walkColor("Red"))
+        assertTrue("Small centered subject must pass", result.passed)
+        assertTrue(result.subjectMatch)
+        assertEquals("Green", result.actualDominantColor)
+    }
+
+    @Test
+    fun subjectPath_subjectAtRuleOfThirdsIntersection_passes() {
+        // Same small subject composed at the upper-left thirds intersection instead
+        // of dead center — good photography must not be punished.
+        val pixels = diskFrame(30, 10, 10, 5, PURE_RED, GRASS_GREEN)
+        val result = ColorValidator.validatePixels(pixels, 30, 30, walkColor("Red"))
+        assertTrue("Rule-of-thirds subject must pass", result.passed)
+        assertTrue(result.subjectMatch)
+    }
+
+    @Test
+    fun subjectPath_sameAreaSmearedAlongEdge_fails() {
+        // Control for the two tests above: a red strip along the top edge of a 60×60
+        // frame holds a similar global share (~7%) as the passing disks, but sits at
+        // no focal point — spatial placement, not just raw share, is what's rewarded.
+        val pixels = IntArray(3600) { i -> if (i / 60 < 6) PURE_RED else GRASS_GREEN }
+        val result = ColorValidator.validatePixels(pixels, 60, 60, walkColor("Red"))
+        assertFalse("Edge smear must not pass as a subject", result.passed)
+        assertFalse(result.subjectMatch)
+    }
+
+    @Test
+    fun subjectPath_tinyCenteredSubject_failsGlobalShareGate() {
+        // A radius-2 speck (~1.4% of the frame) dead center: perfectly composed but
+        // simply too small — MIN_SUBJECT_GLOBAL_SHARE keeps specks from passing.
+        val pixels = diskFrame(30, 15, 15, 2, PURE_RED, GRASS_GREEN)
+        val result = ColorValidator.validatePixels(pixels, 30, 30, walkColor("Red"))
+        assertFalse(result.passed)
+        assertFalse(result.subjectMatch)
+    }
+
+    @Test
+    fun subjectPath_focalWindowOwnedByAnotherColor_fails() {
+        // A red disk at center wearing a thin blue ring. On a Red day the red core
+        // passes. On a Blue day the ring is neither globally dominant (red's core
+        // outweighs it) nor a subject — every focal window it touches is owned by
+        // the red core — exercising the "target must beat every other color in its
+        // window" clause.
+        val size = 30
+        val pixels = IntArray(size * size) { i ->
+            val x = i % size; val y = i / size
+            val dx = x - 15; val dy = y - 15
+            val d2 = dx * dx + dy * dy
+            when {
+                d2 <= 49 -> PURE_RED   // r ≤ 7 core
+                d2 <= 81 -> DEEP_BLUE  // 7 < r ≤ 9 ring
+                else     -> GRAY
+            }
+        }
+        val red = ColorValidator.validatePixels(pixels, size, size, walkColor("Red"))
+        assertTrue("Red core owns the center window", red.passed)
+
+        val blue = ColorValidator.validatePixels(pixels, size, size, walkColor("Blue"))
+        assertFalse("Blue ring must not pass", blue.passed)
+        assertFalse("Blue ring loses every focal window to the red core", blue.subjectMatch)
+    }
+
+    @Test
+    fun subjectPath_globalPassReportsNoSubjectMatch() {
+        // A frame the target dominates outright passes via Path 1; subjectMatch must
+        // stay false so any future "sharp eye!" messaging only fires for real finds.
+        val result = ColorValidator.validatePixels(frame(8, 8, PURE_RED), 8, 8, walkColor("Red"))
+        assertTrue(result.passed)
+        assertFalse(result.subjectMatch)
+    }
+
+    @Test
+    fun subjectPath_lowLightSubject_spatialMathStillPasses() {
+        // Dusk shot: a dark red subject (v≈0.47) against dim green foliage. The
+        // subject is far too dark for the tight-ΔE OKLAB bonus against the vivid
+        // reference swatch, so this exercises the spatial (Gaussian focal-window)
+        // math alone under low lighting — the hue classifier must still bucket the
+        // dark shade correctly and the centered cluster must still win its window.
+        val darkRed = rgb(120, 25, 22)   // h≈2°, s≈0.82, v≈0.47 → Red
+        val dimGreen = rgb(30, 80, 35)   // h≈126°, v≈0.31 → Green
+        val pixels = diskFrame(30, 15, 15, 6, darkRed, dimGreen)
+        val result = ColorValidator.validatePixels(pixels, 30, 30, walkColor("Red"))
+        assertTrue("Low-light subject must pass via the spatial path", result.passed)
+        assertTrue(result.subjectMatch)
+        assertEquals("Green", result.actualDominantColor)
+    }
+
+    @Test
+    fun subjectPath_neutralBackgroundSubject_passes() {
+        // Small red subject on a plain gray wall: neutral pixels dilute the focal
+        // window share but a centered subject still owns its window.
+        val pixels = diskFrame(30, 15, 15, 6, PURE_RED, GRAY)
+        val result = ColorValidator.validatePixels(pixels, 30, 30, walkColor("Red"))
+        assertTrue(result.passed)
+    }
+
+    // ── live viewfinder share (allocation-free fast path) ─────────────────────
+
+    @Test
+    fun liveTargetShare_matchesValidatePixelsMatchPercent() {
+        // The live path must be the same spatial math as Path 1 — the viewfinder
+        // meter and the post-capture verdict may never disagree about the share.
+        val pixels = IntArray(900) { i ->
+            when {
+                i % 7 == 0 -> PURE_RED
+                i % 3 == 0 -> GRASS_GREEN
+                else       -> GRAY
+            }
+        }
+        val hsv = FloatArray(3)
+        val live = ColorValidator.liveTargetShare(pixels, 30, 30, walkColor("Red"), hsv)
+        val full = ColorValidator.validatePixels(pixels, 30, 30, walkColor("Red")).matchPercent
+        assertEquals(full, live, 1e-4f)
+    }
+
+    @Test
+    fun liveTargetShare_fullTargetFrame_isNearOne() {
+        val share = ColorValidator.liveTargetShare(frame(20, 20, PURE_RED), 20, 20, walkColor("Red"), FloatArray(3))
+        assertTrue(share > 0.99f)
+    }
+
+    @Test
+    fun liveTargetShare_noTarget_isZero() {
+        val share = ColorValidator.liveTargetShare(frame(20, 20, GRASS_GREEN), 20, 20, walkColor("Red"), FloatArray(3))
+        assertEquals(0f, share, 1e-6f)
     }
 
     // ── WALK_COLORS integrity ─────────────────────────────────────────────────

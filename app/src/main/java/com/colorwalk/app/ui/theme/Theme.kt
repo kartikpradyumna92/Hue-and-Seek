@@ -1,11 +1,16 @@
 package com.colorwalk.app.ui.theme
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
+import com.colorwalk.app.domain.colorForDay
 
 enum class ThemeMode { DARK, LIGHT, SYSTEM }
 
@@ -74,10 +79,34 @@ fun ColorWalkTheme(
         ThemeMode.LIGHT  -> false
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
     }
-    MaterialTheme(
-        colorScheme = if (dark) DarkColorScheme else LightColorScheme,
-        typography = AppTypography,
-        shapes = AppShapes,
-        content = content
+    val base = if (dark) DarkColorScheme else LightColorScheme
+
+    // Dynamic chromatic theme: the walk color of the day becomes the app's primary
+    // family, so every Material component — tab indicators, buttons, chips, progress
+    // bars — follows today's hunt without per-screen wiring. On-colors come from
+    // measured WCAG luminance (Wcag.contentColorFor), never hardcoded: white text is
+    // unreadable on a Yellow day, black on a Brown day. Color changes (midnight
+    // rollover, first composition) glide over 800 ms instead of snapping.
+    // Deliberately re-evaluated on every recomposition (no remember): colorForDay is
+    // one Calendar read, and caching it would pin yesterday's color after midnight.
+    val dayAccent by animateColorAsState(
+        targetValue = colorForDay(System.currentTimeMillis()).composeColor,
+        animationSpec = tween(800),
+        label = "dayAccent"
     )
+    val palette = dayPaletteFor(accent = dayAccent, background = base.background)
+
+    CompositionLocalProvider(LocalDayPalette provides palette) {
+        MaterialTheme(
+            colorScheme = base.copy(
+                primary = palette.accent,
+                onPrimary = palette.onAccent,
+                primaryContainer = palette.accentContainer,
+                onPrimaryContainer = palette.onAccentContainer
+            ),
+            typography = AppTypography,
+            shapes = AppShapes,
+            content = content
+        )
+    }
 }

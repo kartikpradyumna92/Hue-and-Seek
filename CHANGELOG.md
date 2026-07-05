@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.25.0] - 2026-07-04
+
+Elastic swipe navigation overhaul, live color meter, saliency-aware color matching, EXIF forgery protection, dynamic chromatic theming, gamified swipeable onboarding, and performance/battery hardening.
+
+### Added
+- **Live color meter in Camera** — a real-time meter shows how much of the frame matches today's color before you shoot. Powered by a new `LiveColorAnalyzer` (`ImageAnalysis` at 320×240, `KEEP_ONLY_LATEST`) that downsamples each YUV frame onto a fixed 64×48 grid with zero steady-state allocation, converts via fixed-point BT.601 (`YuvMath`), and streams shares through a conflated channel with a producer-side 0.5% change gate.
+- **Subject-saliency color matching (Path 2)** — photos where the target color is a clear *subject* (concentrated around the center or a rule-of-thirds focal point) now validate even when it isn't globally dominant. Five focal probes, subject-share and global-floor thresholds, plus an OKLAB perceptual tight-match bonus (ΔE ≤ 0.12 → ×1.5) so near-exact hues count more.
+- **OKLAB color space (`OkLab`)** — perceptual color difference (Ottosson constants) used by the saliency bonus; robust in low light where HSV buckets get noisy.
+- **EXIF forgery protection for imports (`ExifIntegrity`)** — imported photos are checked via magic-byte content sniffing, original-vs-digitized timestamp consistency (2 min), file-mtime-before-capture (1 h), and future-timestamp (10 min) rules; tampered files are rejected with a dedicated `ImportTampered` result card.
+- **Golden-ratio composition grid in Camera** — subtle guide lines drawn with `drawWithCache` (no per-frame state reads).
+- **Dynamic chromatic theme** — the app's Material primary family is derived from today's walk color and cross-fades over 800 ms at midnight/day change (`ChromaticTheme`, `DayPalette`). All accent-surface text picks black/white via WCAG relative-luminance contrast (`Wcag`, ≥4.5:1).
+- **Gamified onboarding** — new interactive "catch the color" mini-game page with spring physics; onboarding pages are now swipeable with the exact same physics as the rest of the app, with the Next button preserved.
+- **Camera swipe with black-hold** — swipe right from Home opens the Camera; the viewfinder stays black until the pane is fully settled, eliminating preview tearing during the transition.
+- **Container morph for Newsfeed photos** — tapping a photo morphs it from its card bounds to full screen (crop→fit crossfade), and reverses on every dismissal path.
+- **CI workflow** (`.github/workflows/android-ci.yml`), Play Store asset pipeline (`docs/store-assets/`), `keystore.properties.template`, and checked-in Gradle wrapper for reproducible builds.
+
+### Changed
+- **Swipe navigation rebuilt on hand-rolled elastic physics (`HomeHubScreen` + `SwipePhysics`)** — replaced Pager-based navigation with a clamped one-page-per-gesture drag model: a gesture can never cross more than one screen, commits happen at 30% travel or a ≥1600 px/s flick (with ≥8% minimum travel), velocity is EMA-smoothed to suppress single-frame spikes, and settles inherit gesture velocity into springs (firm commit spring, elastic snap-back spring).
+- **Pinch-to-zoom smoothing** — camera zoom now interpolates exponentially in log space per frame (`withFrameNanos`), so pinch and zoom-chip changes glide instead of stepping.
+- **Onboarding swipe re-architected** — pages live at fixed absolute positions on a continuous clipped strip (offset never reset), fixing the "half-shown page" glitch; per-gesture one-page clamp, same commit/return springs as the hub.
+- **Home clock now lifecycle-aware** — ticks only while `RESUMED` (`repeatOnLifecycle`), stopping background battery drain.
+- **Newsfeed peek strip fades during the up-swipe** to Your Walks and reverses on the way back.
+
+### Fixed
+- **Live meter stuck at 0%** — chroma-plane reads could land one byte past `ByteBuffer.limit` (a known YUV_420_888 quirk); since the sample grid hits the same index every frame, every frame threw and was silently skipped. Reads are now clamped to each plane's limit, and analyzer failures log once instead of never.
+- **Onboarding "half shown" page** — the old implementation re-keyed content on page index and reset the offset in a separate step; any frame between the two writes rendered the new page a full width off-screen.
+- **Camera preview tearing during swipe** — `SurfaceView` ignores transforms; switched `PreviewView` to `COMPATIBLE` mode and added the black-hold so the live feed only renders when the camera pane is fully at rest.
+- **Multi-page drag-through** — one long drag could previously sail across two screens (e.g. Your Walks → past Home → Settings); the per-gesture ±1-viewport clamp makes that structurally impossible.
+- **Velocity estimator oversensitivity** — a single spiky frame could trigger a flick commit; EMA gain retuned (0.85/0.15).
+
+### Performance
+- Zero-steady-state-allocation analyzer loop and allocation-free `ColorValidator.liveTargetShare` (manual indexed lookup, preallocated HSV scratch).
+- Golden grid and swipe rendering avoid per-frame recomposition (draw-phase-only reads, `graphicsLayer` offsets).
+
+### Tests
+- 238 unit tests green. New suites: `ColorValidatorTest` subject-saliency + low-light OKLAB cases (45 total), `OkLabTest` (9), `ExifIntegrityTest` (14), `WcagTest` (8), `SwipePhysicsTest` (11, incl. spike-suppression and transition-boundary cases), `YuvMathTest` (5).
+
+---
+
 ## [1.24.0] - 2026-06-25
 
 Newsfeed journal, photo notes, swipe navigation overhaul, gallery viewer improvements, and permission timing fix.

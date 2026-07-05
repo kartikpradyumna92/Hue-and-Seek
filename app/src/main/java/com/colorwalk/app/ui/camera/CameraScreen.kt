@@ -14,10 +14,14 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -35,6 +39,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -42,6 +48,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -49,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -57,16 +66,34 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import android.util.Size
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import com.colorwalk.app.domain.ColorValidator
+import com.colorwalk.app.ui.theme.DayTheme
 import com.colorwalk.app.viewmodel.CameraViewModel
 import com.colorwalk.app.viewmodel.CaptureState
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.collectLatest
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.ln
 
 private data class ZoomLevel(val label: String, val ratio: Float)
+
+/**
+ * Exponential smoothing rate (1/s) for the zoom ease — the time constant is
+ * 1/RATE ≈ 70 ms: fast enough to feel directly connected to the fingers, slow
+ * enough to swallow pinch jitter, close to Google Photos' dampening.
+ */
+private const val ZOOM_SMOOTHING_RATE = 14f
 
 private val ZOOM_LEVELS = listOf(
     ZoomLevel(".5×", 0.5f),
@@ -135,23 +162,44 @@ fun CameraScreen(
         ActivityResultContracts.PickVisualMedia()
     ) { uri -> if (uri != null) viewModel.onPhotoImported(uri) }
 
-    var swipeXDelta by remember { mutableFloatStateOf(0f) }
+    // Live "how much of the frame is today's color" pipeline. The analyzer produces
+    // into a CONFLATED channel from the camera thread and gates unchanged values at
+    // the source, so everything arriving here is a real meter movement worth a
+    // recomposition.
+    val shareChannel = remember { Channel<Float>(Channel.CONFLATED) }
+    val liveAnalyzer = remember { LiveColorAnalyzer(shareChannel) { viewModel.targetColor.value } }
+    var liveShare by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        for (share in shareChannel) liveShare = share
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { swipeXDelta = 0f },
-                    onDragEnd = {
-                        if (swipeXDelta < -80.dp.toPx()) onBack()
-                        swipeXDelta = 0f
-                    },
-                    onDragCancel = { swipeXDelta = 0f }
-                ) { change, dragAmount ->
-                    change.consume()
-                    swipeXDelta += dragAmount
+            .pointerInput(minZoom, maxZoom) {
+                // Only pinch (2+ fingers) is handled here. Single-finger drags are left
+                // unconsumed so the outer pager (HomeHubScreen) can swipe back to Home.
+                // The pinch only moves the TARGET zoom; the smoothing loop below eases
+                // the hardware toward it, so raw finger jitter never reaches the lens.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val pressed = event.changes.filter { it.pressed }
+                        if (pressed.isEmpty()) break
+                        if (pressed.size >= 2) {
+                            event.changes.forEach { it.consume() }
+                            val c1 = pressed[0]
+                            val c2 = pressed[1]
+                            val prevDist = (c1.previousPosition - c2.previousPosition).getDistance()
+                            val currDist = (c1.position - c2.position).getDistance()
+                            if (prevDist > 0f) {
+                                requestedZoom = (requestedZoom * (currDist / prevDist))
+                                    .coerceIn(minZoom, maxZoom)
+                            }
+                        }
+                    }
                 }
             }
     ) {
@@ -163,7 +211,12 @@ fun CameraScreen(
             AndroidView(
                 factory = { ctx ->
                     PreviewView(ctx).also { previewView ->
-                        bindCamera(ctx, lifecycleOwner, previewView, cameraSelector) { cap, cam ->
+                        // COMPATIBLE (TextureView-backed) instead of the SurfaceView-backed
+                        // default: a SurfaceView is composited on its own hardware layer and
+                        // ignores the pager's translation during a swipe, so the preview pixels
+                        // visibly lag/tear away from the rest of the page mid-drag.
+                        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                        bindCamera(ctx, lifecycleOwner, previewView, cameraSelector, liveAnalyzer, cameraExecutor) { cap, cam ->
                             imageCapture = cap
                             camera = cam
                             cam.cameraInfo.zoomState.value?.let {
@@ -177,16 +230,67 @@ fun CameraScreen(
             )
         }
 
-        // Apply zoom without rebinding the camera. Fires when the user taps a chip
-        // (requestedZoom changes) or when the camera is rebound after a flip (camera
-        // changes). The clamped value is written back to activeZoom so the highlighted
-        // chip always matches what the hardware is actually showing.
-        LaunchedEffect(requestedZoom, camera) {
+        // Golden grid — rule-of-thirds lines plus dots on the five focal points the
+        // validator's subject-saliency path rewards, so composing "on the grid" is
+        // literally composing for a pass. Geometry is computed once per size inside
+        // drawWithCache and the draw block reads NO state: it lives purely in the
+        // draw phase, so pinch-zooming (which recomposes chips/state) never invalidates
+        // or redraws it — flat cost at any refresh rate.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .drawWithCache {
+                    val w = size.width
+                    val h = size.height
+                    val line = Color.White.copy(alpha = 0.20f)
+                    val dot = Color.White.copy(alpha = 0.38f)
+                    val stroke = 1.dp.toPx()
+                    val dotR = 2.5.dp.toPx()
+                    val xs = floatArrayOf(w / 3f, 2f * w / 3f)
+                    val ys = floatArrayOf(h / 3f, 2f * h / 3f)
+                    val focals = arrayOf(
+                        Offset(w / 2f, h / 2f),
+                        Offset(xs[0], ys[0]), Offset(xs[1], ys[0]),
+                        Offset(xs[0], ys[1]), Offset(xs[1], ys[1]),
+                    )
+                    onDrawBehind {
+                        for (x in xs) drawLine(line, Offset(x, 0f), Offset(x, h), stroke)
+                        for (y in ys) drawLine(line, Offset(0f, y), Offset(w, y), stroke)
+                        for (f in focals) drawCircle(dot, dotR, f)
+                    }
+                }
+        )
+
+        // Zoom smoothing: eases the hardware zoom toward requestedZoom with a
+        // frame-clocked exponential curve in LOG space (zoom is perceptually
+        // multiplicative — equal log steps look like equal zoom steps). collectLatest
+        // restarts the ease from the current position whenever the target moves
+        // (pinch stream, chip tap), and the loop exits once converged, so nothing
+        // runs per-frame while idle. Snaps exactly onto the target at the end so the
+        // chip highlight's equality check works.
+        LaunchedEffect(camera) {
             val cam = camera ?: return@LaunchedEffect
-            val state = cam.cameraInfo.zoomState.value ?: return@LaunchedEffect
-            val clamped = requestedZoom.coerceIn(state.minZoomRatio, state.maxZoomRatio)
-            cam.cameraControl.setZoomRatio(clamped)
-            activeZoom = clamped
+            var current = cam.cameraInfo.zoomState.value?.zoomRatio ?: 1f
+            activeZoom = current
+            snapshotFlow { requestedZoom }.collectLatest { raw ->
+                var lastNanos = 0L
+                while (true) {
+                    val state = cam.cameraInfo.zoomState.value ?: break
+                    val target = raw.coerceIn(state.minZoomRatio, state.maxZoomRatio)
+                    if (current == target) break
+                    val frameNanos = withFrameNanos { it }
+                    val dt = if (lastNanos == 0L) 0.016f
+                             else ((frameNanos - lastNanos) / 1e9f).coerceAtMost(0.1f)
+                    lastNanos = frameNanos
+                    val alpha = 1f - exp(-ZOOM_SMOOTHING_RATE * dt)
+                    val lnC = ln(current)
+                    val lnT = ln(target)
+                    current = if (abs(lnT - lnC) < 0.004f) target
+                              else exp(lnC + alpha * (lnT - lnC))
+                    cam.cameraControl.setZoomRatio(current)
+                    activeZoom = current
+                }
+            }
         }
 
         // Top bar
@@ -236,6 +340,42 @@ fun CameraScreen(
                 .padding(bottom = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Live color meter — fills as more of the frame reads as today's color,
+            // full at the 15% global pass threshold. Driven by the analyzer pipeline.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .padding(bottom = 12.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "${(liveShare * 100).toInt()} percent of the frame is ${targetColor.name}"
+                    }
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(120.dp)
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color.White.copy(alpha = 0.22f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth((liveShare / ColorValidator.MIN_TARGET_SHARE).coerceIn(0f, 1f))
+                            .background(targetColor.composeColor)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "${(liveShare * 100).toInt()}%",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
             // Zoom level buttons
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
@@ -247,12 +387,15 @@ fun CameraScreen(
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(48.dp)
                             .clip(CircleShape)
                             .background(
                                 if (isActive) targetColor.composeColor
                                 else Color.Black.copy(alpha = 0.55f)
                             )
+                            .semantics(mergeDescendants = true) {
+                                contentDescription = "${level.label} zoom" + if (isActive) ", selected" else ""
+                            }
                     ) {
                         TextButton(
                             onClick = { requestedZoom = level.ratio },
@@ -261,9 +404,13 @@ fun CameraScreen(
                         ) {
                             Text(
                                 level.label,
-                                fontSize = if (level.label.length > 3) 9.sp else 11.sp,
+                                fontSize = if (level.label.length > 3) 10.sp else 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (isActive) Color.White else Color.White.copy(alpha = 0.75f)
+                                // Active chip sits ON the day accent — content color must
+                                // come from measured luminance (white is unreadable on a
+                                // Yellow day), so it uses the WCAG-derived palette.
+                                color = if (isActive) DayTheme.palette.onAccent
+                                        else Color.White.copy(alpha = 0.75f)
                             )
                         }
                     }
@@ -389,12 +536,21 @@ fun CameraScreen(
             )
         }
 
-        // Result overlay — bottom-anchored card in the thumb zone
+        // Result overlay — bottom-anchored card in the thumb zone, arriving on a
+        // gently bouncy spring (an interior element: overshoot here is charm, and
+        // can't expose anything the way a page-level bounce could).
         AnimatedVisibility(
             visible = captureState !is CaptureState.Idle
                     && captureState !is CaptureState.Processing
                     && captureState !is CaptureState.AwaitingNote,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+            enter = fadeIn() + slideInVertically(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioLowBouncy,
+                    stiffness = 350f,
+                    visibilityThreshold = IntOffset.VisibilityThreshold
+                ),
+                initialOffsetY = { it / 2 }
+            ),
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -555,6 +711,8 @@ private fun bindCamera(
     lifecycleOwner: androidx.lifecycle.LifecycleOwner,
     previewView: PreviewView,
     cameraSelector: CameraSelector,
+    analyzer: ImageAnalysis.Analyzer,
+    analysisExecutor: Executor,
     onBound: (ImageCapture, Camera) -> Unit
 ) {
     val future = ProcessCameraProvider.getInstance(context)
@@ -566,9 +724,24 @@ private fun bindCamera(
         val capture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             .build()
+        // Live color analysis: tiny frames (the analyzer samples 64×48 anyway),
+        // KEEP_ONLY_LATEST so a slow pass drops frames instead of queueing them —
+        // the preview can never stall behind analysis. Bound to the same lifecycle,
+        // so leaving the camera page tears the analyzer down with the hardware.
+        val analysis = ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(Size(320, 240), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                    )
+                    .build()
+            )
+            .build()
+            .also { it.setAnalyzer(analysisExecutor, analyzer) }
         try {
             provider.unbindAll()
-            val cam = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, capture)
+            val cam = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, capture, analysis)
             onBound(capture, cam)
         } catch (e: Exception) {
             Log.e("CameraScreen", "Bind failed", e)
@@ -759,6 +932,10 @@ private fun ResultCard(
                         CaptureState.ImportDuplicate -> Pair(
                             "Already Imported",
                             "This photo is already in your gallery."
+                        )
+                        CaptureState.ImportTampered -> Pair(
+                            "Can't Verify Photo",
+                            "This photo's date metadata looks edited or inconsistent — it can't be counted for today's walk."
                         )
                         else -> Pair("Error", "Something went wrong.")
                     }

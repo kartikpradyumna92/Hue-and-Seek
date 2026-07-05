@@ -35,6 +35,7 @@ sealed class CaptureState {
     object ImportNoDate : CaptureState()
     data class ImportWrongDay(val dateTaken: Long) : CaptureState()
     object ImportDuplicate : CaptureState()
+    object ImportTampered : CaptureState()
 }
 
 @HiltViewModel
@@ -92,6 +93,7 @@ class CameraViewModel @Inject constructor(
                 ImportResult.NoDateMetadata      -> CaptureState.ImportNoDate
                 is ImportResult.NotTakenToday    -> CaptureState.ImportWrongDay(result.dateTaken)
                 ImportResult.AlreadyImported     -> CaptureState.ImportDuplicate
+                ImportResult.MetadataTampered    -> CaptureState.ImportTampered
                 ImportResult.StorageError        -> CaptureState.StorageError
             }
         }

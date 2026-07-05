@@ -3,7 +3,6 @@ package com.colorwalk.app.ui.settings
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,7 +28,6 @@ import com.colorwalk.app.domain.WALK_COLORS
 import com.colorwalk.app.notification.AlarmScheduler
 import com.colorwalk.app.notification.NotificationPrefs
 import com.colorwalk.app.ui.theme.ThemeMode
-import androidx.compose.ui.input.pointer.pointerInput
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -109,24 +107,8 @@ fun SettingsScreen(
         )
     }
 
-    var swipeYDelta by remember { mutableFloatStateOf(0f) }
-
     Surface(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { swipeYDelta = 0f },
-                    onDragEnd = {
-                        if (swipeYDelta < -80.dp.toPx()) onBack()
-                        swipeYDelta = 0f
-                    },
-                    onDragCancel = { swipeYDelta = 0f }
-                ) { change, dragAmount ->
-                    change.consume()
-                    swipeYDelta += dragAmount.y
-                }
-            },
+        modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {
         Column(

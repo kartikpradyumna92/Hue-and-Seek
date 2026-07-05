@@ -61,6 +61,14 @@ private val TAB_LABELS = listOf("By Color", "By Date", "By Place")
 @Composable
 fun GalleryScreen(
     onBack: () -> Unit,
+    // Swipe-right-to-Home from the first tab reports continuous per-frame deltas (with
+    // the pointer event's timestamp, for release-velocity estimation) to the caller
+    // instead of firing onBack() itself — HomeHubScreen owns the single clamped drag
+    // value shared with Home/Camera, so it decides how far that's allowed to move and
+    // whether it settles back to Gallery or through to Home.
+    onEdgeDragStart: () -> Unit = {},
+    onEdgeDrag: (dx: Float, uptimeMillis: Long) -> Unit = { _, _ -> },
+    onEdgeDragEnd: () -> Unit = {},
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
     val colorFolderCards   by viewModel.colorFolderCards.collectAsState()
@@ -189,39 +197,39 @@ fun GalleryScreen(
             }
         }
 
-        // Swipe right past the first tab exits to Home (restores the pre-pager
-        // gesture). Nested-scroll hooks are unreliable here — the pager and its
-        // edge overscroll consume the leftover deltas internally — so this watches
-        // raw pointer events on the Initial pass (delivered before the pager's own
-        // gesture handling) and consumes nothing: tab paging is untouched.
-        // A gesture only counts as an exit-pull if it STARTED with the pager settled
-        // on the first tab, so finishing a Date→Color swipe can never overshoot home.
+        // Swipe right past the first tab drags Home back into view. Nested-scroll hooks
+        // are unreliable here — the pager and its edge overscroll consume the leftover
+        // deltas internally — so this watches raw pointer events on the Initial pass
+        // (delivered before the pager's own gesture handling) and reports the drag to
+        // the caller. Never consumes, so tab paging is untouched. A gesture only counts
+        // as an exit-pull if it STARTED with the pager settled on the first tab, so
+        // finishing a Date→Color swipe can never overshoot home.
         val swipeHomeModifier = Modifier.pointerInput(pagerState) {
-            val thresholdPx = 80.dp.toPx()
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                 val eligible = pagerState.currentPage == 0 &&
                     abs(pagerState.currentPageOffsetFraction) < 0.01f
                 var totalX = 0f
                 var totalY = 0f
-                var fired = false
+                var reporting = false
                 while (true) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                     if (!change.pressed) break
-                    totalX += change.position.x - change.previousPosition.x
+                    val dx = change.position.x - change.previousPosition.x
+                    totalX += dx
                     totalY += change.position.y - change.previousPosition.y
                     val stillAtEdge = pagerState.currentPage == 0 &&
                         abs(pagerState.currentPageOffsetFraction) < 0.01f
                     // Mostly-horizontal rightward pull while the pager has nowhere
-                    // to go → exit to Home. Fire once per gesture.
-                    if (!fired && eligible && stillAtEdge &&
-                        totalX > thresholdPx && totalX > 2 * abs(totalY)
-                    ) {
-                        fired = true
-                        onBack()
+                    // to go → start reporting to Home.
+                    if (!reporting && eligible && stillAtEdge && totalX > 0f && totalX > 2 * abs(totalY)) {
+                        reporting = true
+                        onEdgeDragStart()
                     }
+                    if (reporting) onEdgeDrag(dx, change.uptimeMillis)
                 }
+                if (reporting) onEdgeDragEnd()
             }
         }
 

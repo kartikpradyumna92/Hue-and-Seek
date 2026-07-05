@@ -1,5 +1,6 @@
 package com.colorwalk.app.data.repository
 
+import android.annotation.SuppressLint
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
@@ -20,6 +21,7 @@ import com.colorwalk.app.data.db.ColorSummary
 import com.colorwalk.app.data.db.PhotoDao
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.domain.ColorValidator
+import com.colorwalk.app.domain.ExifIntegrity
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.WalkColor
 import com.colorwalk.app.domain.colorForDay
@@ -304,6 +306,11 @@ class PhotoRepository @Inject constructor(
     suspend fun importPhoto(uri: Uri, targetColor: WalkColor): ImportResult =
         withContext(Dispatchers.IO) {
             val dateTaken = readPhotoDate(uri) ?: return@withContext ImportResult.NoDateMetadata
+            // Forgery gate BEFORE the day check: a tampered "today" date must be
+            // reported as tampering, not accepted as today or excused as wrong-day.
+            if (checkImportIntegrity(uri, dateTaken) is ExifIntegrity.Verdict.Tampered) {
+                return@withContext ImportResult.MetadataTampered
+            }
             if (!isToday(dateTaken)) return@withContext ImportResult.NotTakenToday(dateTaken)
 
             // Re-importing the same photo would insert a second row pointing at the
@@ -796,11 +803,78 @@ class PhotoRepository @Inject constructor(
         return try {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 val exif = ExifInterface(stream)
-                val dateStr = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
-                    ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-                dateStr?.let { SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).parse(it)?.time }
+                parseExifTimestamp(
+                    exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                        ?: exif.getAttribute(ExifInterface.TAG_DATETIME),
+                    exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)
+                        ?: exif.getAttribute(ExifInterface.TAG_OFFSET_TIME)
+                )
             }
         } catch (_: Exception) { null }
+    }
+
+    /**
+     * EXIF datetimes are zone-naive wall-clock strings. When the photo carries its
+     * own UTC offset (TAG_OFFSET_TIME_ORIGINAL, e.g. "+05:30"), interpret the wall
+     * time in THAT zone — a photo taken abroad must not shift days just because the
+     * import happens back home. Without an offset, the device's local zone is
+     * assumed (the historical behavior).
+     */
+    private fun parseExifTimestamp(dateStr: String?, offset: String?): Long? {
+        if (dateStr == null) return null
+        val fmt = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+        if (!offset.isNullOrBlank()) {
+            try { fmt.timeZone = TimeZone.getTimeZone("GMT$offset") } catch (_: Exception) { }
+        }
+        return try { fmt.parse(dateStr)?.time } catch (_: Exception) { null }
+    }
+
+    /**
+     * Forgery checks for imports — container magic bytes plus timestamp
+     * cross-validation ([ExifIntegrity]). Every signal is read defensively: an
+     * unreadable stream or missing column skips its check rather than rejecting a
+     * legitimate photo.
+     */
+    private fun checkImportIntegrity(uri: Uri, captureMillis: Long): ExifIntegrity.Verdict {
+        // 1. The leading bytes must be a real image container — extension/MIME lie,
+        //    magic numbers don't.
+        try {
+            val header = ByteArray(16)
+            val read = context.contentResolver.openInputStream(uri)?.use { it.read(header) } ?: -1
+            if (read >= 12 && ExifIntegrity.sniffFormat(header) == null) {
+                return ExifIntegrity.Verdict.Tampered("unrecognized image container")
+            }
+        } catch (_: Exception) { /* unreadable header → let the decoder decide later */ }
+
+        // 2. DateTimeDigitized for the internal-consistency check.
+        val digitized = try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val exif = ExifInterface(stream)
+                parseExifTimestamp(
+                    exif.getAttribute(ExifInterface.TAG_DATETIME_DIGITIZED),
+                    exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED)
+                        ?: exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)
+                )
+            }
+        } catch (_: Exception) { null }
+
+        // 3. Filesystem mtime (MediaStore stores seconds). 0 = unknown → check skipped.
+        var fileModifiedMillis = 0L
+        try {
+            context.contentResolver.query(
+                uri, arrayOf(MediaStore.Images.Media.DATE_MODIFIED), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val col = cursor.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
+                    if (col >= 0) {
+                        val sec = cursor.getLong(col)
+                        if (sec > 0) fileModifiedMillis = sec * 1000
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+
+        return ExifIntegrity.evaluate(captureMillis, digitized, fileModifiedMillis, System.currentTimeMillis())
     }
 
     private fun readPhotoLocation(uri: Uri): Pair<Double?, Double?> {
@@ -899,6 +973,9 @@ class PhotoRepository @Inject constructor(
      * is empty whenever no app recently obtained a fix — so photos silently saved
      * without coordinates even with location permission granted.
      */
+    // Lint can't see that the surrounding catch(Exception) already handles a
+    // rejected/revoked permission via SecurityException — this isn't a real gap.
+    @SuppressLint("MissingPermission")
     private suspend fun getFreshLocation(): Pair<Double?, Double?> = try {
         val client = LocationServices.getFusedLocationProviderClient(context)
         val cts = CancellationTokenSource()
@@ -964,4 +1041,6 @@ sealed class ImportResult {
     data class NotTakenToday(val dateTaken: Long) : ImportResult()
     object AlreadyImported : ImportResult()
     object StorageError : ImportResult()
+    /** The file's metadata failed forgery checks ([ExifIntegrity]) — date can't be trusted. */
+    object MetadataTampered : ImportResult()
 }

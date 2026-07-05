@@ -90,7 +90,7 @@ fun PhotoGridCard(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(2.dp)
-                            .size(40.dp)
+                            .size(48.dp)
                     ) {
                         Box(
                             modifier = Modifier

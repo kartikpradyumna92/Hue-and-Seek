@@ -13,7 +13,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
@@ -27,16 +26,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.colorForDay
@@ -97,6 +99,10 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onOpenStats: () -> Unit,
     onOpenNewsfeed: () -> Unit,
+    // 1f at rest, fading to 0f as the up-swipe drags Newsfeed into view — driven live by
+    // HomeHubScreen's pager offset so the peek strip dissolves instead of sitting duplicated
+    // under the incoming "Your Walks" list mid-drag.
+    newsfeedPeekAlpha: Float = 1f,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -130,12 +136,17 @@ fun HomeScreen(
         }
     }
 
-    // Live clock — updates every minute
+    // Live clock — updates every minute, but ONLY while the app is actually visible:
+    // repeatOnLifecycle suspends the ticker the moment the activity leaves RESUMED
+    // (background/screen off) and restarts it with a fresh read on return, so the
+    // clock never wakes the process while nobody is looking at it.
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(60_000L)
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                now = System.currentTimeMillis()
+                delay(60_000L)
+            }
         }
     }
 
@@ -149,9 +160,8 @@ fun HomeScreen(
         label = "colorAnim"
     )
 
-    var swipeX by remember { mutableFloatStateOf(0f) }
-    var swipeY by remember { mutableFloatStateOf(0f) }
-
+    // Swiping to Camera/Gallery/Settings/Newsfeed is handled by HomeHubScreen, which
+    // hosts this screen — no local gesture detector needed here.
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -160,29 +170,6 @@ fun HomeScreen(
                     listOf(animatedColor.copy(alpha = 0.25f), MaterialTheme.colorScheme.background)
                 )
             )
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { swipeX = 0f; swipeY = 0f },
-                    onDragEnd = {
-                        val threshold = 80.dp.toPx()
-                        if (kotlin.math.abs(swipeX) > kotlin.math.abs(swipeY)) {
-                            // Horizontal gesture
-                            if (swipeX > threshold) onOpenCamera()
-                            else if (swipeX < -threshold) onOpenGallery()
-                        } else {
-                            // Vertical gesture
-                            if (swipeY < -threshold) onOpenNewsfeed()
-                            else if (swipeY > threshold) onOpenSettings()
-                        }
-                        swipeX = 0f; swipeY = 0f
-                    },
-                    onDragCancel = { swipeX = 0f; swipeY = 0f }
-                ) { change, dragAmount ->
-                    change.consume()
-                    swipeX += dragAmount.x
-                    swipeY += dragAmount.y
-                }
-            }
     ) {
         Column(
             modifier = Modifier
@@ -354,7 +341,7 @@ fun HomeScreen(
 
             // Gesture affordance
             Text(
-                "← gallery  •  camera →  •  ↓ settings",
+                "← gallery  •  camera →  •  ↑ walks  •  ↓ settings",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
             )
@@ -382,7 +369,7 @@ fun HomeScreen(
         ) {
             Icon(
                 Icons.Default.Settings,
-                contentDescription = "Notification settings",
+                contentDescription = "Settings",
                 tint = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.size(28.dp)
             )
@@ -395,7 +382,9 @@ fun HomeScreen(
                 accentColor = animatedColor,
                 backgroundColor = MaterialTheme.colorScheme.background,
                 onClick = onOpenNewsfeed,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .alpha(newsfeedPeekAlpha)
             )
         }
     }
@@ -555,6 +544,14 @@ private fun ColorHeroWithRing(
     }
 }
 
+private data class DayHistoryEntry(
+    val dayIndex: Int,
+    val color: Color,
+    val colorName: String,
+    val weekdayLabel: String,
+    val weekdayFullName: String
+)
+
 @Composable
 private fun ColorHistoryStrip(
     capturedDayIndices: Set<Int>,
@@ -567,6 +564,7 @@ private fun ColorHistoryStrip(
     // Pre-compute all 14 day timestamps once per day (not per item per recomposition)
     val dayData = remember(todayIndex) {
         val weekdayFmt = SimpleDateFormat("EEEEE", Locale.getDefault())
+        val fullWeekdayFmt = SimpleDateFormat("EEEE", Locale.getDefault())
         (0..13).map { offset ->
             val dayOffset = offset - 13
             val millis = Calendar.getInstance().apply {
@@ -576,7 +574,14 @@ private fun ColorHistoryStrip(
                 set(Calendar.MILLISECOND, 0)
                 add(Calendar.DAY_OF_YEAR, dayOffset)
             }.timeInMillis
-            Triple(todayIndex + dayOffset, colorForDay(millis).composeColor, weekdayFmt.format(Date(millis)))
+            val walkColor = colorForDay(millis)
+            DayHistoryEntry(
+                dayIndex = todayIndex + dayOffset,
+                color = walkColor.composeColor,
+                colorName = walkColor.name,
+                weekdayLabel = weekdayFmt.format(Date(millis)),
+                weekdayFullName = fullWeekdayFmt.format(Date(millis))
+            )
         }
     }
 
@@ -590,32 +595,42 @@ private fun ColorHistoryStrip(
             .padding(vertical = 4.dp)
     ) {
         items(14) { offset ->
-            val (dayIndex, dayColor, weekday) = dayData[offset]
-            val captured = dayIndex in capturedDayIndices
-            val isToday = dayIndex == todayIndex
+            val entry = dayData[offset]
+            val captured = entry.dayIndex in capturedDayIndices
+            val isTodayEntry = entry.dayIndex == todayIndex
+            val statusLabel = when {
+                isTodayEntry && captured -> "today, captured"
+                isTodayEntry -> "today, not captured yet"
+                captured -> "captured"
+                else -> "not captured"
+            }
 
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.width(20.dp)
+                modifier = Modifier
+                    .width(20.dp)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "${entry.weekdayFullName}, ${entry.colorName}, $statusLabel"
+                    }
             ) {
                 Box(
                     modifier = Modifier
                         .size(20.dp)
                         .clip(CircleShape)
-                        .background(if (captured) dayColor else dayColor.copy(alpha = 0.18f))
+                        .background(if (captured) entry.color else entry.color.copy(alpha = 0.18f))
                         .then(
-                            if (isToday) Modifier.border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
+                            if (isTodayEntry) Modifier.border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), CircleShape)
                             else Modifier
                         )
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    weekday,
+                    entry.weekdayLabel,
                     fontSize = 9.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(
-                        alpha = if (isToday) 0.8f else 0.4f
+                        alpha = if (isTodayEntry) 0.8f else 0.4f
                     ),
-                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
+                    fontWeight = if (isTodayEntry) FontWeight.Bold else FontWeight.Normal
                 )
             }
         }

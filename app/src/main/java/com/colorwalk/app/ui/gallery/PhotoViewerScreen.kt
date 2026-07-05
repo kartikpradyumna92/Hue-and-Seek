@@ -5,8 +5,6 @@ import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
@@ -36,23 +34,20 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
-import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.memory.MemoryCache
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.ui.components.ZoomableAsyncImage
+import com.colorwalk.app.ui.components.ZoomState
 import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.photoImageRequest
 import java.io.File as JavaFile
@@ -76,13 +71,8 @@ fun PhotoViewerScreen(
     val pagerState = rememberPagerState(initialPage = initialIndex) { photos.size }
 
     // Reset zoom and pan whenever the visible page changes
-    var scale by remember { mutableStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    var imageSize by remember { mutableStateOf(IntSize.Zero) }
-    LaunchedEffect(pagerState.currentPage) {
-        scale = 1f
-        offset = Offset.Zero
-    }
+    val zoomState = remember { ZoomState() }
+    LaunchedEffect(pagerState.currentPage) { zoomState.reset() }
 
     // When a photo is deleted the list shrinks before the pager settles on the new
     // last page. Snap immediately so currentPage is never out-of-bounds.
@@ -129,81 +119,19 @@ fun PhotoViewerScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondBoundsPageCount = 1,
-            userScrollEnabled = scale == 1f
+            userScrollEnabled = zoomState.scale == 1f
         ) { page ->
             val photo = photos[page]
             val revision = rotationRevisions[photo.id] ?: 0
             val cacheKey = "${photo.filePath}::$revision"
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clipToBounds()
-                    .onSizeChanged { imageSize = it }
-                    .pointerInput(scale) {
-                        // Custom gesture handler so single-finger swipes at scale=1 reach
-                        // HorizontalPager. Only consume events when pinching (2+ pointers)
-                        // or panning while already zoomed in (scale > 1).
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            var active = true
-                            while (active) {
-                                val event = awaitPointerEvent()
-                                val pressed = event.changes.filter { it.pressed }
-                                if (pressed.isEmpty()) {
-                                    active = false
-                                } else when {
-                                    pressed.size >= 2 -> {
-                                        // Pinch zoom + pan
-                                        event.changes.forEach { it.consume() }
-                                        val c1 = pressed[0]
-                                        val c2 = pressed[1]
-                                        val prevDist = (c1.previousPosition - c2.previousPosition).getDistance()
-                                        val currDist = (c1.position - c2.position).getDistance()
-                                        val zoomFactor = if (prevDist > 0f) currDist / prevDist else 1f
-                                        val prevCentroid = (c1.previousPosition + c2.previousPosition) / 2f
-                                        val currCentroid = (c1.position + c2.position) / 2f
-                                        val panDelta = currCentroid - prevCentroid
-                                        scale = (scale * zoomFactor).coerceIn(1f, 5f)
-                                        val maxX = ((imageSize.width * (scale - 1)) / 2f).coerceAtLeast(0f)
-                                        val maxY = ((imageSize.height * (scale - 1)) / 2f).coerceAtLeast(0f)
-                                        offset = Offset(
-                                            (offset.x + panDelta.x).coerceIn(-maxX, maxX),
-                                            (offset.y + panDelta.y).coerceIn(-maxY, maxY)
-                                        )
-                                    }
-                                    scale > 1f -> {
-                                        // Single-finger pan while zoomed in
-                                        event.changes.forEach { it.consume() }
-                                        val change = pressed[0]
-                                        val panDelta = change.position - change.previousPosition
-                                        val maxX = ((imageSize.width * (scale - 1)) / 2f).coerceAtLeast(0f)
-                                        val maxY = ((imageSize.height * (scale - 1)) / 2f).coerceAtLeast(0f)
-                                        offset = Offset(
-                                            (offset.x + panDelta.x).coerceIn(-maxX, maxX),
-                                            (offset.y + panDelta.y).coerceIn(-maxY, maxY)
-                                        )
-                                    }
-                                    // scale == 1f, single touch → don't consume; HorizontalPager handles the swipe
-                                }
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                AsyncImage(
-                    model = photoImageRequest(context, photo.filePath, cacheKey),
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer(
-                            scaleX = scale,
-                            scaleY = scale,
-                            translationX = offset.x,
-                            translationY = offset.y
-                        )
-                )
-            }
+            // Single-finger swipes at scale=1 are left unconsumed so HorizontalPager
+            // still receives them; pinch or pan-while-zoomed is handled internally.
+            ZoomableAsyncImage(
+                model = photoImageRequest(context, photo.filePath, cacheKey),
+                contentDescription = null,
+                state = zoomState,
+                modifier = Modifier.fillMaxSize()
+            )
         }
 
         // ── Top bar ──────────────────────────────────────────────────────────
@@ -218,7 +146,7 @@ fun PhotoViewerScreen(
                 onClick = onClose,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .size(40.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.55f))
             ) {
@@ -245,7 +173,7 @@ fun PhotoViewerScreen(
                 IconButton(
                     onClick = { sharePhoto(context, currentPhoto) },
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.55f))
                 ) {
@@ -271,7 +199,7 @@ fun PhotoViewerScreen(
                     },
                     enabled = !isRotating,
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.55f))
                 ) {
@@ -281,7 +209,7 @@ fun PhotoViewerScreen(
                 IconButton(
                     onClick = { showDeleteConfirm = true },
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.55f))
                 ) {
@@ -306,18 +234,21 @@ fun PhotoViewerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ZOOM_LEVELS.forEach { level ->
-                    val active = scale == level
+                    val active = zoomState.scale == level
                     val label = if (level == 1f) "1×" else "${level.toInt()}×"
                     Box(
                         modifier = Modifier
                             .padding(horizontal = 4.dp)
-                            .size(42.dp)
+                            .size(48.dp)
                             .clip(CircleShape)
-                            .background(if (active) Color.White else Color.Black.copy(alpha = 0.55f)),
+                            .background(if (active) Color.White else Color.Black.copy(alpha = 0.55f))
+                            .semantics(mergeDescendants = true) {
+                                contentDescription = "$label zoom" + if (active) ", selected" else ""
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         TextButton(
-                            onClick = { scale = level; offset = Offset.Zero },
+                            onClick = { zoomState.scale = level; zoomState.offset = Offset.Zero },
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(0.dp)
                         ) {
