@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.25.1] - 2026-07-06
+
+Two bug fixes for the Your Walks journal.
+
+### Fixed
+- **Crash when opening a photo from Your Walks** — the full-frame viewer's open morph uses an underdamped spring that briefly overshoots 1.0, and that raw progress value was passed as the scrim's color alpha; Compose throws for alpha > 1, so every photo tap crashed the app mid-animation ("Hue & Seek keeps stopping"). The morph progress is now clamped to [0, 1] before anything reads it.
+- **Your Walks opened on the second photo after a new capture** — the keyed LazyColumn anchors scroll to the first visible item's *key*, so when a just-captured photo was prepended the list stayed pinned to the previous newest photo and the fresh one sat above the viewport. The list now snaps to the top when a new photo arrives while the user is at (or within one card of) the top; a scroll position deep in history is left untouched.
+
+### Docs
+- README rewritten to match the current app: two-path color validation (center-weighted dominance + subject saliency), swipe-hub navigation diagram, Your Walks / Stats / Settings / onboarding sections, live color meter, EXIF import integrity checks, configurable morning/evening reminders, updated project structure and build instructions.
+
+---
+
 ## [1.25.0] - 2026-07-04
 
 Elastic swipe navigation overhaul, live color meter, saliency-aware color matching, EXIF forgery protection, dynamic chromatic theming, gamified swipeable onboarding, and performance/battery hardening.

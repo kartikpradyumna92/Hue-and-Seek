@@ -169,7 +169,9 @@
       "Bash('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' --headless --disable-gpu --force-device-scale-factor=1 --screenshot=/private/tmp/claude-501/-Users-karteekpbulusu-Documents-KB-DataScience-ColorPicture/8478769a-265c-4020-b229-8ca8b065cac4/scratchpad/assets/feature-graphic-raw.png --window-size=1024,500 file:///private/tmp/claude-501/-Users-karteekpbulusu-Documents-KB-DataScience-ColorPicture/8478769a-265c-4020-b229-8ca8b065cac4/scratchpad/assets/feature-graphic.html)",
       "Bash(./gradlew compileDebugKotlin -q)",
       "Bash(./gradlew assembleDebug -q)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(adb logcat *)",
+      "Bash(echo \"build exit=$?\")"
     ],
     "additionalDirectories": [
       "/tmp",

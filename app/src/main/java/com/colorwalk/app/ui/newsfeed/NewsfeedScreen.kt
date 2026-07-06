@@ -97,6 +97,17 @@ fun NewsfeedScreen(
 
     val listState = rememberLazyListState()
 
+    // A keyed LazyColumn anchors scroll to the first visible item's KEY, so when a
+    // just-captured photo is prepended the list stays pinned to the previous newest
+    // photo and the new one sits above the viewport. If the user is at (or within one
+    // card of) the top, snap to the real top so the newest photo is what they see.
+    val newestId = photos.firstOrNull()?.id
+    LaunchedEffect(newestId) {
+        if (newestId != null && listState.firstVisibleItemIndex <= 1) {
+            listState.scrollToItem(0)
+        }
+    }
+
     // Swipe down from the top photo drags Home back into view. Compose's default
     // overscroll/glow effect can absorb a drag that goes past the list's own top edge
     // before it ever reaches an ancestor's nested-scroll dispatch, so — same fix
@@ -451,7 +462,9 @@ private fun FullFrameViewer(
         val wPx = with(density) { maxWidth.toPx() }
         val hPx = with(density) { maxHeight.toPx() }
         val fullRect = Rect(0f, 0f, wPx, hPx)
-        val p = morph.value
+        // The open spring is underdamped and overshoots 1 — Color(alpha > 1) throws,
+        // so everything downstream must see the morph clamped to [0, 1].
+        val p = morph.value.coerceIn(0f, 1f)
         val rect = lerp(originBounds ?: fullRect, fullRect, p)
         // The full (letterboxed, zoomable) rendition fades in over the morphing crop
         // during the last stretch of travel, once the container is nearly full-screen.
