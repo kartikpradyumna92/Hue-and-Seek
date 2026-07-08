@@ -172,12 +172,16 @@ class HomeViewModelTest {
         val todayIndex = com.colorwalk.app.domain.StreakCalculator
             .epochMillisToDayIndex(System.currentTimeMillis())
         coEvery { repo.getStreak() } returns 3
-        coEvery { repo.getCapturedDayIndices() } returns setOf(todayIndex)
+        // Start UNcaptured so the init load can't celebrate — this test is about the
+        // fromSync flip specifically. (Loads no longer clear an active celebration,
+        // so a celebration from init would leak into the assertion below.)
+        coEvery { repo.getCapturedDayIndices() } returns emptySet()
 
         val vm = buildViewModel()
         advanceUntilIdle()
 
         // fromSync = true should suppress celebration even when capturedToday flips
+        coEvery { repo.getCapturedDayIndices() } returns setOf(todayIndex)
         vm.load(fromSync = true)
         advanceUntilIdle()
 
@@ -202,6 +206,42 @@ class HomeViewModelTest {
         assertNull(
             "Celebration must not fire again on the same day",
             vm.state.value.celebrationState
+        )
+    }
+
+    @Test
+    fun celebration_dbEmissionAfterCapture_triggersCelebration() = runTest {
+        // The swipe hub keeps Home composed, so no navigation/lifecycle event fires
+        // after a capture — the Room emission itself must trigger the celebration.
+        val todayIndex = com.colorwalk.app.domain.StreakCalculator
+            .epochMillisToDayIndex(System.currentTimeMillis())
+        val photosFlow = kotlinx.coroutines.flow.MutableStateFlow(
+            emptyList<com.colorwalk.app.data.db.PhotoEntity>()
+        )
+        every { repo.getAllPhotos() } returns photosFlow
+        coEvery { repo.getStreak() } returns 1
+
+        val vm = buildViewModel()
+        advanceUntilIdle() // init load + sync complete, nothing captured yet
+
+        // Capture lands: DB now reports today's index and Room re-emits the list.
+        coEvery { repo.getCapturedDayIndices() } returns setOf(todayIndex)
+        photosFlow.value = listOf(mockk(relaxed = true))
+        advanceUntilIdle()
+
+        assertTrue(
+            "DB emission after a capture must trigger the daily celebration",
+            vm.state.value.celebrationState is CelebrationState.Daily
+        )
+
+        // A follow-up emission (async location resolution / note save) must NOT
+        // clear the celebration mid-confetti.
+        photosFlow.value = listOf(mockk(relaxed = true), mockk(relaxed = true))
+        advanceUntilIdle()
+
+        assertTrue(
+            "Follow-up DB emissions must not cut an active celebration short",
+            vm.state.value.celebrationState is CelebrationState.Daily
         )
     }
 

@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.25.2] - 2026-07-07
+
+Restores the confetti celebration after a successful capture.
+
+### Fixed
+- **Confetti no longer appeared after a validated photo** — the celebration fires in `HomeViewModel.load()` when "captured today" flips, but the only post-startup trigger was a lifecycle observer that relied on navigation rebuilding the Home screen. Since the swipe-hub redesign Home stays permanently composed, so returning from Camera fired no event and `load()` never re-ran — this also left the streak counter and progress ring stale until the next app restart. Home now observes the photo database directly: Room re-emits on every insert, so a saved capture refreshes Home and fires the confetti no matter how the user navigates back.
+- **Celebration resilience** — emissions during startup gallery sync still never celebrate (reinstall recovery stays silent), and follow-up DB writes right after a capture (async location resolution, note save) no longer wipe an in-flight celebration mid-confetti. Once-per-day dedupe and milestone variants (7/21/30… days) unchanged.
+
+### Tests
+- New `celebration_dbEmissionAfterCapture_triggersCelebration` regression test (capture emission fires confetti; follow-up emission doesn't cut it short); `celebration_fromSyncLoad_doesNotTriggerCelebration` reworked to isolate the fromSync guard now that loads preserve an active celebration. 239 tests total.
+
+---
+
 ## [1.25.1] - 2026-07-06
 
 Two bug fixes for the Your Walks journal.

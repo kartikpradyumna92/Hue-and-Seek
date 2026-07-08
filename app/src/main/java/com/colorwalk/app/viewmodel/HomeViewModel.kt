@@ -12,6 +12,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -49,6 +50,11 @@ class HomeViewModel @Inject constructor(
 
     private var loadJob: Job? = null
 
+    // True once startup gallery sync has finished. DB emissions before this point are
+    // startup/recovery churn, not a user capture, and must not celebrate.
+    @Volatile
+    private var syncCompleted = false
+
     init {
         load()
         viewModelScope.launch {
@@ -58,6 +64,16 @@ class HomeViewModel @Inject constructor(
                 android.util.Log.e("HomeViewModel", "Gallery sync failed", e)
             }
             load(fromSync = true)
+            syncCompleted = true
+        }
+        // The swipe hub keeps Home permanently composed, so returning from Camera
+        // triggers no navigation or lifecycle event — the DB is the only reliable
+        // signal that a photo was captured. Room re-emits on every insert/update;
+        // skip the initial emission (startup state, already covered by load() above).
+        viewModelScope.launch {
+            repo.getAllPhotos().drop(1).collect {
+                load(fromSync = !syncCompleted)
+            }
         }
     }
 
@@ -90,7 +106,10 @@ class HomeViewModel @Inject constructor(
                 capturedToday = capturedToday,
                 capturedDayIndices = capturedDayIndices,
                 shouldShowReview = streak >= 7 && reviewNotYetShown,
-                celebrationState = celebration
+                // Never null out a celebration that's still playing: follow-up DB
+                // emissions (async location resolution, note save) re-run load()
+                // moments after the capture and must not cut the confetti short.
+                celebrationState = celebration ?: _state.value.celebrationState
             )
         }
     }
