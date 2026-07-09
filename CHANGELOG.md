@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.26.0] - 2026-07-08
+
+Audit-driven hardening release: all five High-severity findings (plus two performance findings) from a full code/security review fixed. Minor version bump because the daily color rotation shifts once (see below).
+
+### Fixed
+- **Camera stayed on after leaving the Camera pane** — CameraX use cases are bound to the activity lifecycle, which stays RESUMED for the whole session; nothing unbound them when the pane was swiped away, so the camera hardware, preview pipeline, and live analyzer kept running (green privacy indicator lit, battery draining) while the user browsed Home/Gallery/Walks/Settings. The camera provider is now unbound the moment the pane leaves composition, before the analysis executor is shut down.
+- **Infinite spinner if the captured JPEG failed to decode** — the shutter callback silently returned while the state was still Processing, leaving an unusable camera. Decode failure now logs and surfaces the storage-error card with Try Again.
+- **Out-of-memory risk at the shutter on high-megapixel devices** — the capture path decoded the full-sensor JPEG unbounded and allocated a second full-size bitmap for rotation (hundreds of MB peak on 50MP+ sensors). It now uses the same bounded two-pass decode as the import path (dimensions first, then `inSampleSize` capping at 4096px).
+- **Stale color of the day when the app stayed open across midnight** — the target color only refreshed on activity resume, and the swipe hub keeps one activity resumed all session, so captures after midnight validated against yesterday's color. New DST-safe `millisUntilNextLocalMidnight()` helper (unit-tested); the Camera pane refreshes its target on entry and re-arms at each midnight; Home reloads when its minute ticker crosses into a new local day — color, theme, streak, and "captured today" all roll over without a restart.
+- **Color rotation skipped a color every non-leap New Year** — the day index (`YEAR*366 + DAY_OF_YEAR`) advanced by 2 across Dec 31 → Jan 1. Now uses the continuous local-zone epoch day, with leap- and non-leap-year boundary regression tests. **Note:** this shifts which color falls on which date once, at update time; existing photos keep their stored color.
+
+### Performance
+- **Hub no longer recomposes every frame during swipes** — the peek-strip fade is read inside the draw phase (`graphicsLayer` lambda) and the confetti visibility gate is `derivedStateOf`, so drag offsets never trigger composition-phase invalidation.
+- **Home no longer fully reloads on every DB write** — the refresh trigger reacts only when the photo count or newest timestamp changes; note saves and background geocode updates skip the streak recompute, while captures and deletes still refresh (and still fire confetti).
+
+### Tests
+- 242 unit tests green. New: two `millisUntilNextLocalMidnight` boundary tests, two year-boundary `colorForDay` regression tests; three `ColorForDayTest` cases rewritten against the epoch-day formula.
+
+---
+
 ## [1.25.2] - 2026-07-07
 
 Restores the confetti celebration after a successful capture.

@@ -1,7 +1,8 @@
 package com.colorwalk.app.domain
 
 import androidx.compose.ui.graphics.Color
-import java.util.Calendar
+import java.time.Instant
+import java.time.ZoneId
 
 data class WalkColor(
     val name: String,
@@ -21,9 +22,13 @@ val WALK_COLORS = listOf(
 )
 
 fun colorForDay(dayEpoch: Long): WalkColor {
-    // Use local calendar day so the color never flips at UTC midnight
-    val cal = Calendar.getInstance()   // local timezone
-    cal.timeInMillis = dayEpoch
-    val dayIndex = cal.get(Calendar.YEAR) * 366 + cal.get(Calendar.DAY_OF_YEAR)
-    return WALK_COLORS[Math.floorMod(dayIndex, WALK_COLORS.size)]
+    // Local-calendar epoch day: flips at LOCAL midnight (never UTC), and the index is
+    // continuous across year boundaries. The previous YEAR*366 + DAY_OF_YEAR formula
+    // advanced by 2 across every non-leap New Year, silently skipping one color in
+    // the 8-color rotation (H-5).
+    val dayIndex = Instant.ofEpochMilli(dayEpoch)
+        .atZone(ZoneId.systemDefault())
+        .toLocalDate()
+        .toEpochDay()
+    return WALK_COLORS[Math.floorMod(dayIndex, WALK_COLORS.size.toLong()).toInt()]
 }

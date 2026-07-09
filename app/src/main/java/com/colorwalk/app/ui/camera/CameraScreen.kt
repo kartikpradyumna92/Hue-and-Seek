@@ -138,8 +138,24 @@ fun CameraScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // ON_RESUME alone can't cover the hub: the activity stays RESUMED for the whole
+    // session, so crossing local midnight while foreground fired no refresh and the
+    // camera kept validating against yesterday's color (H-4). Refresh on entering
+    // the pane (it leaves composition whenever the hub isn't settled on Camera),
+    // then re-arm for each midnight while the user stays here.
+    LaunchedEffect(Unit) {
+        viewModel.refreshTargetColor()
+        while (true) {
+            kotlinx.coroutines.delay(
+                com.colorwalk.app.domain.StreakCalculator.millisUntilNextLocalMidnight() + 500L
+            )
+            viewModel.refreshTargetColor()
+        }
+    }
+
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var useFrontCamera by remember { mutableStateOf(false) }
     // requestedZoom: the level the user tapped; activeZoom: the ratio the camera
     // actually applied after clamping to the device's supported range. Only
@@ -153,7 +169,18 @@ fun CameraScreen(
     }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
-    DisposableEffect(Unit) { onDispose { cameraExecutor.shutdown() } }
+    // The use cases are bound to the ACTIVITY lifecycle, which stays RESUMED for the
+    // whole session — leaving this pane does NOT stop the camera on its own. Unbind
+    // explicitly on dispose (before shutting the analysis executor, so no frame is
+    // ever posted to a dead executor), or the hardware, preview pipeline, and live
+    // analyzer keep running — privacy indicator lit and battery burning — the entire
+    // time the user is on Home/Gallery/Settings/Newsfeed (H-1).
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraProvider?.unbindAll()
+            cameraExecutor.shutdown()
+        }
+    }
 
     val cameraSelector = if (useFrontCamera)
         CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
@@ -216,9 +243,10 @@ fun CameraScreen(
                         // ignores the pager's translation during a swipe, so the preview pixels
                         // visibly lag/tear away from the rest of the page mid-drag.
                         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                        bindCamera(ctx, lifecycleOwner, previewView, cameraSelector, liveAnalyzer, cameraExecutor) { cap, cam ->
+                        bindCamera(ctx, lifecycleOwner, previewView, cameraSelector, liveAnalyzer, cameraExecutor) { cap, cam, provider ->
                             imageCapture = cap
                             camera = cam
+                            cameraProvider = provider
                             cam.cameraInfo.zoomState.value?.let {
                                 minZoom = it.minZoomRatio
                                 maxZoom = it.maxZoomRatio
@@ -458,8 +486,26 @@ fun CameraScreen(
                                         buffer.get(bytes)
                                         val cameraXRotation = proxy.imageInfo.rotationDegrees
                                         proxy.close()
-                                        var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                            ?: return
+                                        // Bounded two-pass decode, mirroring the import path:
+                                        // ImageCapture delivers max sensor resolution, and an
+                                        // unbounded decode plus the rotation copy below peaks at
+                                        // 2 full ARGB bitmaps — hundreds of MB on a 50MP+ sensor,
+                                        // a straight OOM crash at the shutter (H-3). 4096px is
+                                        // ample for validation and the saved JPEG.
+                                        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOpts)
+                                        val decodeOpts = BitmapFactory.Options().apply {
+                                            inSampleSize = calculateInSampleSize(boundsOpts.outWidth, boundsOpts.outHeight, 4096, 4096)
+                                        }
+                                        // A failed decode (corrupt HAL output, OOM on the byte
+                                        // array) must reset Processing, or the spinner shows
+                                        // forever with no way to retake the photo (H-2).
+                                        var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+                                            ?: run {
+                                                Log.e("CameraScreen", "Captured JPEG failed to decode")
+                                                viewModel.onCaptureError()
+                                                return
+                                            }
                                         // Prefer EXIF orientation embedded in the JPEG by the camera HAL
                                         // (reflects actual device orientation at capture time). Fall back
                                         // to CameraX rotationDegrees only if EXIF tag is absent.
@@ -713,7 +759,7 @@ private fun bindCamera(
     cameraSelector: CameraSelector,
     analyzer: ImageAnalysis.Analyzer,
     analysisExecutor: Executor,
-    onBound: (ImageCapture, Camera) -> Unit
+    onBound: (ImageCapture, Camera, ProcessCameraProvider) -> Unit
 ) {
     val future = ProcessCameraProvider.getInstance(context)
     future.addListener({
@@ -742,7 +788,7 @@ private fun bindCamera(
         try {
             provider.unbindAll()
             val cam = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, capture, analysis)
-            onBound(capture, cam)
+            onBound(capture, cam, provider)
         } catch (e: Exception) {
             Log.e("CameraScreen", "Bind failed", e)
         }
@@ -981,3 +1027,19 @@ private fun ResultSwatch(color: Color, label: String, sub: String) {
 private fun parseResultHex(hex: String): Color = try {
     Color(android.graphics.Color.parseColor(hex))
 } catch (_: Exception) { Color.Gray }
+
+/**
+ * Largest power-of-2 inSampleSize keeping the decode within maxW×maxH — identical
+ * to the import path's bound in PhotoRepository, applied here to shutter captures.
+ */
+private fun calculateInSampleSize(width: Int, height: Int, maxWidth: Int, maxHeight: Int): Int {
+    var inSampleSize = 1
+    if (height > maxHeight || width > maxWidth) {
+        val halfHeight = height / 2
+        val halfWidth = width / 2
+        while (halfHeight / inSampleSize >= maxHeight && halfWidth / inSampleSize >= maxWidth) {
+            inSampleSize *= 2
+        }
+    }
+    return inSampleSize
+}

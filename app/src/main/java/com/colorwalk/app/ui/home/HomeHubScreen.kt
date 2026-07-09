@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -93,7 +94,19 @@ fun HomeHubScreen(
     val dragY = remember { Animatable(0f) } // + = toward Settings (above), - = toward Newsfeed (below)
     val scope = rememberCoroutineScope()
 
-    val newsfeedProgress = if (viewportH > 0) (-dragY.value / viewportH).coerceIn(0f, 1f) else 0f
+    // M-1: never read dragX/dragY .value or .isRunning directly in composition — they
+    // change every frame of a drag/settle and would recompose the whole hub per frame.
+    // The peek alpha is passed as a lambda (read inside HomeScreen's draw phase); the
+    // celebration gate is derived state that only invalidates when the Boolean flips.
+    val newsfeedPeekAlpha: () -> Float = {
+        val h = viewportH
+        if (h > 0) 1f - (-dragY.value / h).coerceIn(0f, 1f) else 1f
+    }
+    val hubSettledOnHome by remember {
+        derivedStateOf {
+            !dragX.isRunning && !dragY.isRunning && dragX.value == 0f && dragY.value == 0f
+        }
+    }
 
     fun settleX(start: Float, target: Float, velocity: Float) {
         scope.launch {
@@ -350,7 +363,10 @@ fun HomeHubScreen(
                 onOpenSettings = { animateYTo(viewportH.toFloat()) },
                 onOpenStats    = onOpenStats,
                 onOpenNewsfeed = { animateYTo(-viewportH.toFloat()) },
-                newsfeedPeekAlpha = 1f - newsfeedProgress
+                newsfeedPeekAlpha = newsfeedPeekAlpha,
+                // Confetti earned on the Camera pane must not play off-screen: only
+                // mount the celebration once the hub is settled on Home.
+                celebrationVisible = hubSettledOnHome
             )
         }
 

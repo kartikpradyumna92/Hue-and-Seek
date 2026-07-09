@@ -12,6 +12,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -68,12 +69,20 @@ class HomeViewModel @Inject constructor(
         }
         // The swipe hub keeps Home permanently composed, so returning from Camera
         // triggers no navigation or lifecycle event — the DB is the only reliable
-        // signal that a photo was captured. Room re-emits on every insert/update;
-        // skip the initial emission (startup state, already covered by load() above).
+        // signal that a photo was captured. Room re-emits on EVERY row update though
+        // (note saves, geocode backfill), and load() re-reads all photo dates — so
+        // only react when the photo set itself changes: the count (capture/delete)
+        // or the newest timestamp (capture). The list is ordered dateTaken DESC, so
+        // first() is the max. Skip the initial emission (startup state, already
+        // covered by load() above). (M-2)
         viewModelScope.launch {
-            repo.getAllPhotos().drop(1).collect {
-                load(fromSync = !syncCompleted)
-            }
+            repo.getAllPhotos()
+                .map { photos -> photos.size to (photos.firstOrNull()?.dateTaken ?: 0L) }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    load(fromSync = !syncCompleted)
+                }
         }
     }
 

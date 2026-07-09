@@ -53,18 +53,37 @@ class ColorForDayTest {
     }
 
     @Test
-    fun colorForDay_twoDifferentDays_mayReturnDifferentColors() {
-        // Jan 1 2025 and Jan 2 2025 should map to adjacent WALK_COLORS slots.
-        // We verify the algorithm is day-sensitive (even if by chance same color,
-        // the index arithmetic differs by 1).
+    fun colorForDay_consecutiveDays_advanceExactlyOneSlot() {
+        // Adjacent calendar days must map to adjacent WALK_COLORS slots.
         val day1 = dateOf(2025, 1, 1, 12)
         val day2 = dateOf(2025, 1, 2, 12)
-        val cal1 = Calendar.getInstance().apply { timeInMillis = day1 }
-        val cal2 = Calendar.getInstance().apply { timeInMillis = day2 }
-        val idx1 = cal1.get(Calendar.YEAR) * 366 + cal1.get(Calendar.DAY_OF_YEAR)
-        val idx2 = cal2.get(Calendar.YEAR) * 366 + cal2.get(Calendar.DAY_OF_YEAR)
-        // Adjacent day indices must differ
-        assertEquals(1, idx2 - idx1)
+        val idx1 = WALK_COLORS.indexOf(colorForDay(day1))
+        val idx2 = WALK_COLORS.indexOf(colorForDay(day2))
+        assertEquals((idx1 + 1) % WALK_COLORS.size, idx2)
+    }
+
+    @Test
+    fun colorForDay_nonLeapNewYear_doesNotSkipAColor() {
+        // H-5 regression: the old YEAR*366 + DAY_OF_YEAR index advanced by 2 across
+        // Dec 31 → Jan 1 of a non-leap year, skipping one color in the rotation.
+        val dec31 = dateOf(2025, 12, 31, 12) // 2025 is not a leap year
+        val jan1  = dateOf(2026, 1, 1, 12)
+        val idxDec = WALK_COLORS.indexOf(colorForDay(dec31))
+        val idxJan = WALK_COLORS.indexOf(colorForDay(jan1))
+        assertEquals(
+            "Jan 1 must be the color immediately after Dec 31 in the rotation",
+            (idxDec + 1) % WALK_COLORS.size,
+            idxJan
+        )
+    }
+
+    @Test
+    fun colorForDay_leapYearBoundary_alsoAdvancesOneSlot() {
+        val dec31 = dateOf(2024, 12, 31, 12) // 2024 is a leap year
+        val jan1  = dateOf(2025, 1, 1, 12)
+        val idxDec = WALK_COLORS.indexOf(colorForDay(dec31))
+        val idxJan = WALK_COLORS.indexOf(colorForDay(jan1))
+        assertEquals((idxDec + 1) % WALK_COLORS.size, idxJan)
     }
 
     @Test
@@ -113,25 +132,15 @@ class ColorForDayTest {
     }
 
     @Test
-    fun colorForDay_indexModuloEqualsWalkColorsSize() {
-        // The algorithm is: WALK_COLORS[floorMod(year*366+dayOfYear, WALK_COLORS.size)]
-        // Verify the formula produces an index always in [0, size)
-        val cal = Calendar.getInstance()
-        repeat(100) { offset ->
-            cal.add(Calendar.DAY_OF_MONTH, 1)
-            val raw = cal.get(Calendar.YEAR) * 366 + cal.get(Calendar.DAY_OF_YEAR)
-            val idx = Math.floorMod(raw, WALK_COLORS.size)
-            assertTrue("Index $idx must be in [0, ${WALK_COLORS.size})", idx in 0 until WALK_COLORS.size)
-        }
-    }
-
-    @Test
     fun colorForDay_knownDate_returnsExpectedColor() {
-        // Pinned regression test. Compute expected by running the same algorithm inline.
+        // Pinned regression test. Compute expected by running the same algorithm
+        // inline (local-zone epoch day modulo the palette size).
         val knownTs = dateOf(2025, 6, 15, 12)
-        val cal = Calendar.getInstance().apply { timeInMillis = knownTs }
-        val dayIndex = cal.get(Calendar.YEAR) * 366 + cal.get(Calendar.DAY_OF_YEAR)
-        val expectedColor = WALK_COLORS[Math.floorMod(dayIndex, WALK_COLORS.size)]
+        val epochDay = java.time.Instant.ofEpochMilli(knownTs)
+            .atZone(java.time.ZoneId.systemDefault())
+            .toLocalDate()
+            .toEpochDay()
+        val expectedColor = WALK_COLORS[Math.floorMod(epochDay, WALK_COLORS.size.toLong()).toInt()]
         assertEquals(expectedColor, colorForDay(knownTs))
     }
 

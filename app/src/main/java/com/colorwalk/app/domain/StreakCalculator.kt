@@ -47,4 +47,17 @@ object StreakCalculator {
             .toLocalDate()
             .toEpochDay()
             .toInt()
+
+    /**
+     * Millis from [nowMillis] until the next local midnight, DST-safe (a 23/25-hour
+     * day yields the true wall-clock distance, not a fixed 24h). Used to refresh the
+     * color of the day while the app stays foreground across midnight (H-4) — the
+     * hub keeps one activity RESUMED all session, so no lifecycle event fires.
+     */
+    fun millisUntilNextLocalMidnight(nowMillis: Long = System.currentTimeMillis()): Long {
+        val zone = ZoneId.systemDefault()
+        val now = Instant.ofEpochMilli(nowMillis).atZone(zone)
+        val nextMidnight = now.toLocalDate().plusDays(1).atStartOfDay(zone)
+        return java.time.Duration.between(now, nextMidnight).toMillis().coerceAtLeast(1L)
+    }
 }

@@ -35,6 +35,7 @@ Thumbs.db
 # Local project notes — not for version control
 TODO.txt
 BUGS_TODO.txt
+fable5_bugs.txt
 
 # Serena tool cache
 .serena/

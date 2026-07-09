@@ -24,8 +24,8 @@ android {
         applicationId = "com.colorwalk.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "1.25.2"
+        versionCode = 24
+        versionName = "1.26.0"
     }
 
     signingConfigs {

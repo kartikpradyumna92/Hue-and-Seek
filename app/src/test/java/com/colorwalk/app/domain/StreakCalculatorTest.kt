@@ -252,4 +252,24 @@ class StreakCalculatorTest {
         val photos = listOf(todayAt(23, 59))
         assertEquals(1, StreakCalculator.compute(photos))
     }
+
+    // ── millisUntilNextLocalMidnight ─────────────────────────────────────────
+
+    @Test
+    fun millisUntilNextLocalMidnight_isPositiveAndAtMostOneDstDay() {
+        val remaining = StreakCalculator.millisUntilNextLocalMidnight()
+        // Never zero/negative; never longer than a 25-hour DST day.
+        assertEquals(true, remaining in 1..(25L * 60 * 60 * 1000))
+    }
+
+    @Test
+    fun millisUntilNextLocalMidnight_landsExactlyOnTheNextDayIndex() {
+        val now = System.currentTimeMillis()
+        val remaining = StreakCalculator.millisUntilNextLocalMidnight(now)
+        val todayIndex = StreakCalculator.epochMillisToDayIndex(now)
+        // now + remaining is the first instant of the NEXT local day…
+        assertEquals(todayIndex + 1, StreakCalculator.epochMillisToDayIndex(now + remaining))
+        // …and one millisecond before it is still today.
+        assertEquals(todayIndex, StreakCalculator.epochMillisToDayIndex(now + remaining - 1))
+    }
 }

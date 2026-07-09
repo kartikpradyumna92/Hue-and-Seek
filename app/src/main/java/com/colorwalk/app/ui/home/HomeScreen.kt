@@ -26,7 +26,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -100,9 +100,16 @@ fun HomeScreen(
     onOpenStats: () -> Unit,
     onOpenNewsfeed: () -> Unit,
     // 1f at rest, fading to 0f as the up-swipe drags Newsfeed into view — driven live by
-    // HomeHubScreen's pager offset so the peek strip dissolves instead of sitting duplicated
-    // under the incoming "Your Walks" list mid-drag.
-    newsfeedPeekAlpha: Float = 1f,
+    // HomeHubScreen's drag offset. A lambda, not a Float: the value changes every frame
+    // of a vertical drag, so it's read inside graphicsLayer (draw phase only) and never
+    // triggers recomposition (M-1).
+    newsfeedPeekAlpha: () -> Float = { 1f },
+    // True only when Home is the settled, on-screen hub pane. The hub keeps Home
+    // composed while the user is on Camera/Gallery/etc., and the capture that earns
+    // the confetti happens on the Camera pane — without this gate the celebration
+    // would mount, play, and clear itself entirely off-screen before the user
+    // returns Home.
+    celebrationVisible: Boolean = true,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -149,6 +156,13 @@ fun HomeScreen(
             }
         }
     }
+
+    // Day rollover while foreground: the hub keeps this activity RESUMED all session,
+    // so no lifecycle event fires at midnight — but the minute ticker above does. The
+    // moment `now` crosses into a new local day, reload so the color of the day, the
+    // theme, and the "captured today" state all flip without an app restart (H-4).
+    val todayIndex = com.colorwalk.app.domain.StreakCalculator.epochMillisToDayIndex(now)
+    LaunchedEffect(todayIndex) { viewModel.load() }
 
     val dayName = remember(now) { SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(now)) }
     val dateStr = remember(now) { SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).format(Date(now)) }
@@ -350,13 +364,17 @@ fun HomeScreen(
             Spacer(Modifier.height(if (recentPhotos.isNotEmpty()) 116.dp else 20.dp))
         }
 
-        // Confetti celebration overlay
-        state.celebrationState?.let { celebration ->
-            CelebrationOverlay(
-                celebration = celebration,
-                accentColor = animatedColor,
-                onDone = { viewModel.onCelebrationDone() }
-            )
+        // Confetti celebration overlay — mounted only while Home is actually the
+        // visible pane, so a celebration earned on the Camera pane stays pending and
+        // plays the moment the user lands back on Home.
+        if (celebrationVisible) {
+            state.celebrationState?.let { celebration ->
+                CelebrationOverlay(
+                    celebration = celebration,
+                    accentColor = animatedColor,
+                    onDone = { viewModel.onCelebrationDone() }
+                )
+            }
         }
 
         // Settings gear
@@ -384,7 +402,7 @@ fun HomeScreen(
                 onClick = onOpenNewsfeed,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .alpha(newsfeedPeekAlpha)
+                    .graphicsLayer { alpha = newsfeedPeekAlpha() }
             )
         }
     }
