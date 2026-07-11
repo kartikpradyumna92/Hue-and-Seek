@@ -20,6 +20,12 @@ interface PhotoDao {
     @Query("SELECT COUNT(*) FROM photos WHERE dateTaken = :dateTaken")
     suspend fun countByDateTaken(dateTaken: Long): Int
 
+    // Import dedup (M-4): EXIF dates are second-precision while MediaStore dates
+    // carry millis, so duplicates are hunted at second granularity and then
+    // disambiguated by original source size in the repository.
+    @Query("SELECT * FROM photos WHERE dateTaken / 1000 = :epochSecond")
+    suspend fun getByDateTakenSecond(epochSecond: Long): List<PhotoEntity>
+
     @Query("SELECT COUNT(*) FROM photos WHERE colorName = :colorName")
     suspend fun countByColor(colorName: String): Int
 
@@ -45,6 +51,21 @@ interface PhotoDao {
 
     @Query("SELECT * FROM photos")
     suspend fun getAllPhotosSnapshot(): List<PhotoEntity>
+
+    @Query("SELECT * FROM photos WHERE id = :id")
+    suspend fun getById(id: Long): PhotoEntity?
+
+    // Donor row for coordinate inheritance when naming a photo's location (M-7):
+    // any OTHER photo already carrying this name with a real GPS fix (present and
+    // not the (0,0) "null island" bad fix).
+    @Query(
+        """SELECT * FROM photos
+           WHERE locationName = :locationName AND id != :excludeId
+             AND latitude IS NOT NULL AND longitude IS NOT NULL
+             AND (ABS(latitude) >= 0.001 OR ABS(longitude) >= 0.001)
+           LIMIT 1"""
+    )
+    suspend fun getLocationDonor(locationName: String, excludeId: Long): PhotoEntity?
 
     @Query("DELETE FROM photos WHERE id = :id")
     suspend fun deleteById(id: Long)

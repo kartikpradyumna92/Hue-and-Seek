@@ -50,6 +50,35 @@ internal object DeletionTombstones {
         editor.apply()
     }
 
+    /**
+     * Drops tombstones that no longer guard anything (M-10 — the sets grew without
+     * bound). A tombstone's ONLY job is to stop syncGalleryWithDatabase() from
+     * re-importing a matching MediaStore row; once no such row exists, the tombstone
+     * is inert and safe to drop. (Age-based pruning would be wrong: a non-owned
+     * MediaStore copy from a previous install can outlive any retention window, and
+     * dropping its tombstone would resurrect the A2 bug.)
+     *
+     * Call ONLY with a complete, successful MediaStore scan — [liveNames]/[liveDates]
+     * from a failed or permission-denied query would wipe every tombstone.
+     */
+    fun pruneOrphaned(context: Context, liveNames: Set<String>, liveDates: Set<Long>) {
+        val prefs = prefs(context)
+        val names = prefs.getStringSet(KEY_NAMES, null)
+        val dates = prefs.getStringSet(KEY_DATES, null)
+        if (names.isNullOrEmpty() && dates.isNullOrEmpty()) return
+        val keptNames = names?.filterTo(HashSet()) { it in liveNames }
+        val keptDates = dates?.filterTo(HashSet()) { it.toLongOrNull() in liveDates }
+        val editor = prefs.edit()
+        var dirty = false
+        if (names != null && keptNames!!.size != names.size) {
+            editor.putStringSet(KEY_NAMES, keptNames); dirty = true
+        }
+        if (dates != null && keptDates!!.size != dates.size) {
+            editor.putStringSet(KEY_DATES, keptDates); dirty = true
+        }
+        if (dirty) editor.apply()
+    }
+
     fun deletedFilenames(context: Context): Set<String> =
         prefs(context).getStringSet(KEY_NAMES, emptySet())?.toHashSet() ?: emptySet()
 

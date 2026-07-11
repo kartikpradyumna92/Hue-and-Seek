@@ -179,6 +179,10 @@ fun CameraScreen(
         onDispose {
             cameraProvider?.unbindAll()
             cameraExecutor.shutdown()
+            // Leaving the pane with the note prompt still open counts as skipping it —
+            // otherwise the stale AwaitingNote greets the user instead of the
+            // viewfinder on their next swipe into Camera.
+            viewModel.dismissNotePromptIfPending()
         }
     }
 
@@ -575,7 +579,13 @@ fun CameraScreen(
         if (awaitingNote != null) {
             NotePromptCard(
                 state = awaitingNote,
-                onSkip = onBack,
+                // Skip must reset the state machine, not just navigate: the ViewModel
+                // outlives this pane, so a lingering AwaitingNote re-mounts the note
+                // prompt (instead of the viewfinder) on the NEXT swipe into Camera.
+                onSkip = {
+                    viewModel.resetState()
+                    onBack()
+                },
                 onSave = { note ->
                     viewModel.saveNoteForPhoto(awaitingNote.photoId, note, onDone = onBack)
                 }

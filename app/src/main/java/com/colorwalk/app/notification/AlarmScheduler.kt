@@ -9,12 +9,42 @@ import java.util.Calendar
 
 object AlarmScheduler {
 
-    private const val REQUEST_MORNING = 2001
-    private const val REQUEST_EVENING = 2002
+    private const val REQUEST_MORNING     = 2001
+    private const val REQUEST_EVENING     = 2002
+    private const val REQUEST_LAST_CHANCE = 2003
 
-    const val EXTRA_SLOT   = "SLOT"
-    const val SLOT_MORNING = "MORNING"
-    const val SLOT_EVENING = "EVENING"
+    const val EXTRA_SLOT       = "SLOT"
+    const val SLOT_MORNING     = "MORNING"
+    const val SLOT_EVENING     = "EVENING"
+    const val SLOT_LAST_CHANCE = "LAST_CHANCE"
+
+    // ── Last-chance nudge timing ─────────────────────────────────────────────
+    // A quiet third reminder for days when the user-set reminders came and went
+    // with the walk still unfinished. 9 PM is late enough that the day is clearly
+    // slipping away but early enough to act on; if the user's own evening slot is
+    // late, the nudge yields 90 minutes of breathing room so the two never feel
+    // like a double-tap, and it never lands past 23:30 — a nudge at midnight
+    // isn't gentle.
+    internal const val LAST_CHANCE_DEFAULT_MINUTE = 21 * 60         // 21:00
+    internal const val LAST_CHANCE_GAP_MINUTES    = 90              // after a late evening slot
+    internal const val LAST_CHANCE_LATEST_MINUTE  = 23 * 60 + 30    // 23:30 hard cap
+    internal const val LAST_CHANCE_MIN_GAP        = 30              // below this, evening IS the last call
+    private  const val LATE_EVENING_MINUTE        = 19 * 60 + 30    // evening ≥ 19:30 pushes the nudge
+
+    /**
+     * Minute-of-day for the last-chance nudge, or null when it shouldn't exist
+     * (the user's evening reminder is already so late it serves as the last call).
+     * Pure — JVM-tested.
+     */
+    internal fun lastChanceMinuteOfDay(eveningEnabled: Boolean, eveningMinuteOfDay: Int): Int? {
+        var candidate = LAST_CHANCE_DEFAULT_MINUTE
+        if (eveningEnabled && eveningMinuteOfDay >= LATE_EVENING_MINUTE) {
+            candidate = eveningMinuteOfDay + LAST_CHANCE_GAP_MINUTES
+        }
+        candidate = minOf(candidate, LAST_CHANCE_LATEST_MINUTE)
+        if (eveningEnabled && candidate < eveningMinuteOfDay + LAST_CHANCE_MIN_GAP) return null
+        return candidate
+    }
 
     /** Schedules whichever slots are individually enabled; cancels the others. */
     fun scheduleBoth(context: Context) {
@@ -32,6 +62,7 @@ object AlarmScheduler {
             requestCode = REQUEST_MORNING,
             slot        = SLOT_MORNING
         )
+        refreshLastChance(context)
     }
 
     fun scheduleEvening(context: Context) {
@@ -42,15 +73,54 @@ object AlarmScheduler {
             requestCode = REQUEST_EVENING,
             slot        = SLOT_EVENING
         )
+        refreshLastChance(context)
     }
 
-    fun cancelMorning(context: Context) = cancelOne(context, REQUEST_MORNING, SLOT_MORNING)
-    fun cancelEvening(context: Context) = cancelOne(context, REQUEST_EVENING, SLOT_EVENING)
+    fun cancelMorning(context: Context) {
+        cancelOne(context, REQUEST_MORNING, SLOT_MORNING)
+        refreshLastChance(context)
+    }
+
+    fun cancelEvening(context: Context) {
+        cancelOne(context, REQUEST_EVENING, SLOT_EVENING)
+        refreshLastChance(context)
+    }
+
+    /**
+     * Arms or disarms the last-chance nudge from current prefs. Armed only while
+     * the master toggle is on AND at least one regular slot is enabled — the nudge
+     * backs up the user's own reminders; it is not an independent third slot.
+     * Every slot mutation above routes through here, so the nudge tracks evening
+     * time changes automatically.
+     */
+    fun refreshLastChance(context: Context) {
+        val anySlot = NotificationPrefs.isEnabled(context) &&
+            (NotificationPrefs.isMorningEnabled(context) || NotificationPrefs.isEveningEnabled(context))
+        val minuteOfDay = if (anySlot) {
+            lastChanceMinuteOfDay(
+                eveningEnabled = NotificationPrefs.isEveningEnabled(context),
+                eveningMinuteOfDay = NotificationPrefs.getEveningHour(context) * 60 +
+                    NotificationPrefs.getEveningMinute(context)
+            )
+        } else null
+        if (minuteOfDay == null) {
+            cancelOne(context, REQUEST_LAST_CHANCE, SLOT_LAST_CHANCE)
+        } else {
+            schedule(
+                context,
+                hour        = minuteOfDay / 60,
+                minute      = minuteOfDay % 60,
+                requestCode = REQUEST_LAST_CHANCE,
+                slot        = SLOT_LAST_CHANCE
+            )
+        }
+    }
 
     /** Cancels all alarms (used by master toggle off). */
     fun cancel(context: Context) {
-        cancelMorning(context)
-        cancelEvening(context)
+        cancelOne(context, REQUEST_MORNING, SLOT_MORNING)
+        cancelOne(context, REQUEST_EVENING, SLOT_EVENING)
+        cancelOne(context, REQUEST_LAST_CHANCE, SLOT_LAST_CHANCE)
     }
 
     private fun schedule(context: Context, hour: Int, minute: Int, requestCode: Int, slot: String) {

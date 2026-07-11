@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.27.0] - 2026-07-11
+
+End-of-day gentle nudge, camera note-prompt fix, and the second wave of audit hardening (8 Medium findings fixed; only 2 remain open).
+
+### Added
+- **End-of-day gentle nudge** — if both user-set reminders come and go with the day's walk unfinished, a silent last-call notification arrives at 9:00 PM (sliding to 90 minutes after a late evening reminder, capped at 11:30 PM; skipped entirely when the evening reminder is late enough to be the last call itself). Deliberately non-intrusive: separate low-importance channel (no sound/vibration/heads-up, independently mutable in system settings), replaces an unread earlier reminder instead of stacking, softer copy, and it only fires if the walk still isn't done at that moment. Re-arms automatically on reminder-time changes, reboots, and app updates. A caption in Settings shows the live computed nudge time. Timing rule is a pure function with 7 unit tests.
+- **Capture provenance in EXIF** — the public gallery copy now carries the walk color and measured dominant hex in its UserComment tag, and reinstall recovery reads it back: recovered photos return to the album they were actually captured for instead of deriving the color from the date. (6 round-trip/rejection tests.)
+
+### Fixed
+- **Stale note prompt instead of the viewfinder** — tapping Skip on the post-capture note prompt (or swiping away with it open) left the camera state machine stuck at "awaiting note"; the next swipe into Camera re-mounted the prompt instead of the viewfinder. Skip now resets the state, and leaving the pane with the prompt open counts as skipping (the photo is already saved; notes can still be added from Your Walks).
+- **Import dedup edge cases** — duplicate detection now hunts at second granularity and disambiguates by original source-file size (schema v3 adds `originalSizeBytes`): a re-import of the same photo is caught regardless of millis-vs-seconds metadata precision, while two distinct burst shots sharing a second both import.
+- **MediaStore operations scoped to the app's album** — deleting a photo or writing a note's EXIF to the MediaStore copy previously matched by filename alone and could hit a same-named copy the user saved into another album; both now also require the Pictures/ColorWalk path.
+- **Notification polish** — channel description no longer claims "at noon"; the reminder receiver skips its DB work when notifications are revoked at the OS level (still rescheduling so reminders resume when re-enabled).
+
+### Security
+- **FileProvider narrowed to least privilege** — removed the unused external-storage, external-files, and cache roots; only the private photos directory (the sole shared content) remains exposed.
+
+### Performance / Code quality
+- O(1) DB lookups for note saves and location tagging (new `getById` / `getLocationDonor` queries) instead of loading the whole photo table.
+- Every meaningful silent `catch` in the repository now logs (ERROR for capture-losing failures, WARN for lost side-effects, DEBUG for expected states) — the failure class that previously shipped the frozen live-meter bug.
+- Deletion tombstones are pruned once their MediaStore ghost is gone (existence-based, not age-based, so the post-reinstall resurrection guard never weakens), keeping prefs bounded.
+
+### Schema
+- **DB version 2 → 3** — `ALTER TABLE photos ADD COLUMN originalSizeBytes INTEGER`; null for captures and existing rows.
+
+### Tests
+- 257 unit tests green (+15 since 1.26.0): last-chance timing suite, PhotoProvenance round-trips, note-prompt dismissal, plus new DAO coverage (second-window dedup query, size column round-trip).
+
+---
+
 ## [1.26.0] - 2026-07-08
 
 Audit-driven hardening release: all five High-severity findings (plus two performance findings) from a full code/security review fixed. Minor version bump because the daily color rotation shifts once (see below).

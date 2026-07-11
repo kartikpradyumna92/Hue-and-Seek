@@ -332,6 +332,34 @@ fun SettingsScreen(
                                 },
                                 onChangeTap = { showEveningPicker = true }
                             )
+
+                            // Informational only — the last-chance nudge has no toggle of
+                            // its own; it rides on the reminders above (and can be muted
+                            // per-channel in system settings).
+                            if (morningEnabled || eveningEnabled) {
+                                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                                val lastChanceMinute = AlarmScheduler.lastChanceMinuteOfDay(
+                                    eveningEnabled, eveningHour * 60 + eveningMinute
+                                )
+                                val lastChanceText = if (lastChanceMinute != null) {
+                                    val cal = java.util.Calendar.getInstance().apply {
+                                        set(java.util.Calendar.HOUR_OF_DAY, lastChanceMinute / 60)
+                                        set(java.util.Calendar.MINUTE, lastChanceMinute % 60)
+                                    }
+                                    val timeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                                        .format(cal.time)
+                                    "Miss your reminders? A silent last-call nudge arrives around $timeStr on days your walk isn't done — no sound, no buzz."
+                                } else {
+                                    "Your evening reminder is late enough to double as the day's last call — no extra nudge is sent."
+                                }
+                                Text(
+                                    lastChanceText,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                                )
+                            }
                         }
                     }
                 }

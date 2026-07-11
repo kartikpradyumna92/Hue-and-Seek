@@ -102,7 +102,7 @@ class CameraViewModel @Inject constructor(
     fun saveNoteForPhoto(photoId: Long, note: String, onDone: () -> Unit) {
         viewModelScope.launch {
             // Reuse the same EXIF + MediaStore write path as the newsfeed editor.
-            val photo = repo.getAllPhotosSnapshot().firstOrNull { it.id == photoId }
+            val photo = repo.getPhotoById(photoId)
             if (photo != null) repo.saveDescription(photo, note)
             _captureState.value = CaptureState.Idle
             onDone()
@@ -110,4 +110,18 @@ class CameraViewModel @Inject constructor(
     }
 
     fun resetState() { _captureState.value = CaptureState.Idle }
+
+    /**
+     * Clears a note prompt the user walked away from (swiped off the Camera pane
+     * with the prompt open). ONLY AwaitingNote is cleared — the photo is already
+     * saved, so nothing is lost and notes can still be added from Your Walks. Any
+     * other state (Processing, Failed, error cards) is left untouched: Processing
+     * must survive the pane leaving composition, since capture results land while
+     * the hub is mid-slide back to Home.
+     */
+    fun dismissNotePromptIfPending() {
+        if (_captureState.value is CaptureState.AwaitingNote) {
+            _captureState.value = CaptureState.Idle
+        }
+    }
 }

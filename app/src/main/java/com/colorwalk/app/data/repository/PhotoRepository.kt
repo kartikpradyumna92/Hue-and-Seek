@@ -22,7 +22,9 @@ import com.colorwalk.app.data.db.PhotoDao
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.domain.ColorValidator
 import com.colorwalk.app.domain.ExifIntegrity
+import com.colorwalk.app.domain.PhotoProvenance
 import com.colorwalk.app.domain.StreakCalculator
+import com.colorwalk.app.domain.WALK_COLORS
 import com.colorwalk.app.domain.WalkColor
 import com.colorwalk.app.domain.colorForDay
 import com.google.android.gms.location.LocationServices
@@ -47,6 +49,12 @@ import java.util.*
 
 import javax.inject.Inject
 import javax.inject.Singleton
+
+// M-8: IO failures in here used to be swallowed with empty catch blocks — which is
+// exactly how the live-meter bug shipped (every frame threw, nothing was ever
+// logged). Expected/per-design fallbacks stay quiet or log at DEBUG; anything that
+// loses user-visible work logs at WARN or ERROR.
+private const val TAG = "PhotoRepository"
 
 @Singleton
 class PhotoRepository @Inject constructor(
@@ -79,7 +87,10 @@ class PhotoRepository @Inject constructor(
                 val exif = ExifInterface(photo.filePath)
                 exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, tag)
                 exif.saveAttributes()
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                // Note survives in the DB either way; only the EXIF copy is lost.
+                android.util.Log.w(TAG, "EXIF description write failed for ${photo.filePath}", e)
+            }
         }
 
         // 2. Write to the MediaStore copy so Google Photos sees the updated EXIF
@@ -97,13 +108,16 @@ class PhotoRepository @Inject constructor(
      */
     private fun writeDescriptionToMediaStore(filename: String, description: String) {
         val resolver = context.contentResolver
-        val selection = "${MediaStore.Images.Media.DISPLAY_NAME} = ?"
+        // M-6: DISPLAY_NAME alone is only unique per directory — constrain to the
+        // app's own album so a same-named copy the user saved elsewhere is never
+        // the row that gets modified.
+        val (selection, args) = colorWalkAlbumSelection(filename)
         val cursor = try {
             resolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 arrayOf(MediaStore.Images.Media._ID),
                 selection,
-                arrayOf(filename),
+                args,
                 null
             )
         } catch (_: Exception) { return }
@@ -128,7 +142,8 @@ class PhotoRepository @Inject constructor(
                 exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description)
                 exif.saveAttributes()
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "MediaStore description write failed for $filename", e)
         } finally {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val notPending = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
@@ -213,9 +228,12 @@ class PhotoRepository @Inject constructor(
         markBackfillAttempted(toAttempt.map { it.id })
     }
 
+    suspend fun getPhotoById(id: Long): PhotoEntity? = withContext(Dispatchers.IO) {
+        dao.getById(id)
+    }
+
     suspend fun tagPhotoLocation(id: Long, locationName: String) = withContext(Dispatchers.IO) {
-        val photos = dao.getAllPhotosSnapshot()
-        val photo = photos.firstOrNull { it.id == id } ?: return@withContext
+        val photo = dao.getById(id) ?: return@withContext
 
         // A photo with a usable GPS fix keeps its own coordinates — naming it must
         // never overwrite real data (B7). Only photos without a fix inherit lat/lon
@@ -223,9 +241,7 @@ class PhotoRepository @Inject constructor(
         if (hasRealFix(photo.latitude, photo.longitude)) {
             dao.updateLocation(id, photo.latitude, photo.longitude, locationName)
         } else {
-            val ref = photos.firstOrNull {
-                it.id != id && it.locationName == locationName && hasRealFix(it.latitude, it.longitude)
-            }
+            val ref = dao.getLocationDonor(locationName, excludeId = id)
             dao.updateLocation(id, ref?.latitude, ref?.longitude, locationName)
         }
     }
@@ -279,8 +295,9 @@ class PhotoRepository @Inject constructor(
 
             val (lat, lon) = locationDeferred.await()
 
-            // Secondary: publish to system gallery with GPS EXIF so Google Photos shows location.
-            publishToSystemGallery(bitmap, filename, now, lat, lon)
+            // Secondary: publish to system gallery with GPS + provenance EXIF so Google
+            // Photos shows location and reinstall recovery restores the real color (M-9).
+            publishToSystemGallery(bitmap, filename, now, lat, lon, targetColor.name, validation.dominantHex)
             bitmap.recycle()  // C3: done with the pixel data — private file and MediaStore copy are written
 
             val id = dao.insert(
@@ -313,9 +330,22 @@ class PhotoRepository @Inject constructor(
             }
             if (!isToday(dateTaken)) return@withContext ImportResult.NotTakenToday(dateTaken)
 
-            // Re-importing the same photo would insert a second row pointing at the
-            // same file (B5) — exact-millis timestamp match identifies it cheaply.
-            if (dao.countByDateTaken(dateTaken) > 0) return@withContext ImportResult.AlreadyImported
+            // Re-importing the same photo must not insert a second row (B5/M-4).
+            // Exact-millis matching had two failure modes: EXIF dates are second-
+            // precision while MediaStore dates carry millis (same photo, different
+            // precision → duplicate slipped through), and two burst shots sharing a
+            // second-precision timestamp collided (different photos → second one
+            // falsely rejected). So: hunt candidates at SECOND granularity, then
+            // disambiguate by the original source file's byte size. A candidate with
+            // unknown size (in-app capture, legacy row) stays a duplicate — never
+            // trade a false accept for a false reject on old data.
+            val incomingSize = queryContentSize(uri)
+            val sameSecond = dao.getByDateTakenSecond(dateTaken / 1000)
+            val isDuplicate = sameSecond.any { row ->
+                row.originalSizeBytes == null || incomingSize <= 0L ||
+                    row.originalSizeBytes == incomingSize
+            }
+            if (isDuplicate) return@withContext ImportResult.AlreadyImported
 
             val bitmap = decodeBitmapFromUri(uri) ?: return@withContext ImportResult.StorageError
             val validation = ColorValidator.validate(bitmap, targetColor)
@@ -342,7 +372,8 @@ class PhotoRepository @Inject constructor(
                     latitude = lat,
                     longitude = lon,
                     locationName = null,   // resolved asynchronously below (B11)
-                    dominantColorHex = validation.dominantHex
+                    dominantColorHex = validation.dominantHex,
+                    originalSizeBytes = incomingSize.takeIf { it > 0L }   // M-4 dedup identity
                 )
             )
             // Re-importing a previously deleted photo is a deliberate re-add — drop
@@ -397,9 +428,10 @@ class PhotoRepository @Inject constructor(
                 if (dest.exists() && dest.length() > 0L) {
                     pass1Updates.add(Pair(photo.id, dest.absolutePath))
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // URI no longer accessible (e.g. fresh reinstall with different UID).
                 // Pass 2 will attempt recovery via the MediaStore query.
+                android.util.Log.d(TAG, "Pass 1 migration copy failed for photo ${photo.id}: $e")
             }
         }
         // Apply Pass 1 writes in one transaction (C4)
@@ -461,13 +493,19 @@ class PhotoRepository @Inject constructor(
                 arrayOf("%ColorWalk%"),
                 null
             )
-        } catch (_: Exception) {
-            null   // SecurityException if READ_MEDIA_IMAGES denied — skip Pass 2 gracefully
+        } catch (e: Exception) {
+            // SecurityException if READ_MEDIA_IMAGES denied — skip Pass 2 gracefully.
+            android.util.Log.w(TAG, "Sync Pass 2 MediaStore query failed — recovery skipped", e)
+            null
         }
 
         // Collect all Pass 2 file I/O results before writing to DB (C4)
         val pass2PathUpdates = mutableListOf<Pair<Long, String>>()   // (id, recoveredPath)
         val pass2Inserts     = mutableListOf<PhotoEntity>()
+
+        // Every ColorWalk row the scan actually sees — feeds tombstone pruning (M-10).
+        val liveMediaNames = HashSet<String>()
+        val liveMediaDates = HashSet<Long>()
 
         cursor?.use { c ->
             val idCol   = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
@@ -477,11 +515,13 @@ class PhotoRepository @Inject constructor(
             while (c.moveToNext()) {
                 val name = c.getString(nameCol) ?: continue
                 if (!name.startsWith("ColorWalk_")) continue
+                liveMediaNames.add(name)
 
                 var dateTaken = c.getLong(dateCol)
                 if (dateTaken < 1_000_000_000_000L) {
                     dateTaken = parseDateFromFilename(name) ?: continue
                 }
+                liveMediaDates.add(dateTaken)
 
                 // Never resurrect a photo the user explicitly deleted (A2) — and never
                 // use its MediaStore entry as a migration source either.
@@ -529,26 +569,39 @@ class PhotoRepository @Inject constructor(
 
                 // Genuinely new photo — recover it (fresh reinstall, or first sync).
                 val privateFile = copyMediaUriToPrivateStorage(name, mediaUri)
-                val color = colorForDay(dateTaken)
-                // Recover description from EXIF so a reinstall doesn't lose notes the
-                // user wrote before (the JPEG in Google Photos carries the tag).
-                val recoveredDescription = privateFile?.let {
+                // Recover what the JPEG itself carries: the user's note
+                // (ImageDescription) and the capture provenance (UserComment, M-9 —
+                // the color the photo was ACTUALLY captured for plus its measured
+                // dominant hex). Photos published before provenance stamping fall
+                // back to deriving the color from the date, as before.
+                var recoveredDescription: String? = null
+                var provenance: PhotoProvenance.Tag? = null
+                privateFile?.let { file ->
                     try {
-                        ExifInterface(it.absolutePath)
+                        val exif = ExifInterface(file.absolutePath)
+                        recoveredDescription = exif
                             .getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION)
                             ?.trim()?.ifBlank { null }
-                    } catch (_: Exception) { null }
+                        provenance = PhotoProvenance.parse(
+                            exif.getAttribute(ExifInterface.TAG_USER_COMMENT)
+                        )
+                    } catch (e: Exception) {
+                        android.util.Log.w(TAG, "EXIF recovery read failed for $name", e)
+                    }
                 }
+                val fallbackColor = colorForDay(dateTaken)
+                val colorName = provenance?.colorName ?: fallbackColor.name
+                val colorHex = WALK_COLORS.firstOrNull { it.name == colorName }?.hex ?: fallbackColor.hex
                 pass2Inserts.add(
                     PhotoEntity(
                         filePath = privateFile?.absolutePath ?: mediaUri.toString(),
-                        colorName = color.name,
-                        colorHex = color.hex,
+                        colorName = colorName,
+                        colorHex = colorHex,
                         dateTaken = dateTaken,
                         latitude = null,
                         longitude = null,
                         locationName = null,
-                        dominantColorHex = color.hex,
+                        dominantColorHex = provenance?.dominantHex ?: fallbackColor.hex,
                         description = recoveredDescription
                     )
                 )
@@ -564,6 +617,13 @@ class PhotoRepository @Inject constructor(
                 for ((id, path) in pass2PathUpdates) dao.updateFilePath(id, path)
                 for (entity in pass2Inserts) dao.insert(entity)
             }
+        }
+
+        // Tombstones whose MediaStore ghost is gone protect nothing — drop them so
+        // the prefs sets stay bounded (M-10). Only after a SUCCESSFUL scan: a null
+        // cursor (permission denied) saw nothing and must not wipe live tombstones.
+        if (cursor != null) {
+            DeletionTombstones.pruneOrphaned(context, liveMediaNames, liveMediaDates)
         }
     }
 
@@ -586,7 +646,9 @@ class PhotoRepository @Inject constructor(
             }
             exif.setAttribute(ExifInterface.TAG_ORIENTATION, next.toString())
             exif.saveAttributes()
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "rotatePhoto failed for ${photo.filePath}", e)
+        }
     }
 
     /** Deletes a photo from the app DB, private storage, and MediaStore. */
@@ -615,7 +677,10 @@ class PhotoRepository @Inject constructor(
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            // DB row still goes away below; the orphaned file is the only leak.
+            android.util.Log.w(TAG, "deletePhoto file cleanup failed for ${photo.filePath}", e)
+        }
         dao.deleteById(photo.id)
     }
 
@@ -639,13 +704,34 @@ class PhotoRepository @Inject constructor(
     private fun deleteFromMediaStore(filename: String) {
         if (!filename.startsWith("ColorWalk_")) return
         try {
+            // M-6: never delete by DISPLAY_NAME alone — a copy the user made into
+            // another album shares the name and would be destroyed too. Only rows
+            // inside Pictures/ColorWalk are ours to remove.
+            val (selection, args) = colorWalkAlbumSelection(filename)
             context.contentResolver.delete(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                "${MediaStore.Images.Media.DISPLAY_NAME} = ?",
-                arrayOf(filename)
+                selection,
+                args
             )
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            // Expected for rows owned by a previous install (tombstones cover those).
+            android.util.Log.d(TAG, "MediaStore delete failed for $filename: $e")
+        }
     }
+
+    /**
+     * Selection matching [filename] ONLY within the app's Pictures/ColorWalk album
+     * (M-6). RELATIVE_PATH exists from API 29; older devices match on the DATA path.
+     */
+    private fun colorWalkAlbumSelection(filename: String): Pair<String, Array<String>> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "${MediaStore.Images.Media.DISPLAY_NAME} = ? AND ${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?" to
+                arrayOf(filename, "${Environment.DIRECTORY_PICTURES}/ColorWalk%")
+        } else {
+            @Suppress("DEPRECATION")
+            "${MediaStore.Images.Media.DISPLAY_NAME} = ? AND ${MediaStore.Images.Media.DATA} LIKE ?" to
+                arrayOf(filename, "%/${Environment.DIRECTORY_PICTURES}/ColorWalk/%")
+        }
 
     // ── C1: per-photo backfill-attempted markers ─────────────────────────────
     // Stored in "app_prefs" SharedPreferences alongside tombstones. After a photo
@@ -697,13 +783,25 @@ class PhotoRepository @Inject constructor(
         val file = File(dir, filename)
         FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         file
-    } catch (_: Exception) { null }
+    } catch (e: Exception) {
+        // ERROR: this is the primary copy — failing here loses the capture.
+        android.util.Log.e(TAG, "saveToPrivateStorage failed for $filename", e)
+        null
+    }
 
     /**
      * Publishes a copy of the photo to the system gallery (MediaStore) for visibility
      * in the Photos app. This is best-effort — the app's display doesn't depend on it.
      */
-    private fun publishToSystemGallery(bitmap: Bitmap, filename: String, now: Long, lat: Double?, lon: Double?) {
+    private fun publishToSystemGallery(
+        bitmap: Bitmap,
+        filename: String,
+        now: Long,
+        lat: Double?,
+        lon: Double?,
+        colorName: String,
+        dominantHex: String
+    ) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val cv = ContentValues().apply {
@@ -716,12 +814,15 @@ class PhotoRepository @Inject constructor(
                 val resolver = context.contentResolver
                 val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return
                 resolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-                if (lat != null && lon != null) {
-                    resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
-                        val exif = ExifInterface(pfd.fileDescriptor)
-                        writeGpsExif(exif, lat, lon)
-                        exif.saveAttributes()
-                    }
+                resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                    val exif = ExifInterface(pfd.fileDescriptor)
+                    // Provenance for reinstall recovery (M-9); GPS when available.
+                    exif.setAttribute(
+                        ExifInterface.TAG_USER_COMMENT,
+                        PhotoProvenance.encode(colorName, dominantHex)
+                    )
+                    if (lat != null && lon != null) writeGpsExif(exif, lat, lon)
+                    exif.saveAttributes()
                 }
                 cv.clear(); cv.put(MediaStore.Images.Media.IS_PENDING, 0)
                 resolver.update(uri, cv, null, null)
@@ -731,11 +832,15 @@ class PhotoRepository @Inject constructor(
                 val file = File(dir, filename)
                 FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
                 // bitmap.compress writes no EXIF — set the capture time so the media
-                // scanner indexes a correct DATE_TAKEN, plus GPS when available.
+                // scanner indexes a correct DATE_TAKEN, plus GPS/provenance.
                 val exif = ExifInterface(file.absolutePath)
                 val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date(now))
                 exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
                 exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
+                exif.setAttribute(
+                    ExifInterface.TAG_USER_COMMENT,
+                    PhotoProvenance.encode(colorName, dominantHex)
+                )
                 if (lat != null && lon != null) writeGpsExif(exif, lat, lon)
                 exif.saveAttributes()
                 // Without an explicit scan the file is invisible to the system gallery
@@ -744,7 +849,12 @@ class PhotoRepository @Inject constructor(
                     context, arrayOf(file.absolutePath), arrayOf("image/jpeg"), null
                 )
             }
-        } catch (_: Exception) { /* best-effort — never block the capture flow */ }
+        } catch (e: Exception) {
+            // Best-effort — never block the capture flow. The app displays from
+            // private storage, so a failed publish only affects Google Photos
+            // visibility and post-reinstall recovery (M-8: logged, was silent).
+            android.util.Log.w(TAG, "publishToSystemGallery failed for $filename", e)
+        }
     }
 
     private fun writeGpsExif(exif: ExifInterface, lat: Double, lon: Double) {
@@ -776,7 +886,10 @@ class PhotoRepository @Inject constructor(
                 FileOutputStream(dest).use { input.copyTo(it) }
             }
             if (dest.exists() && dest.length() > 0L) dest else null
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "MediaStore copy to private storage failed for $filename", e)
+            null
+        }
     }
 
     /**
@@ -788,8 +901,17 @@ class PhotoRepository @Inject constructor(
         // copyMediaUriToPrivateStorage already handles the "already exists" check internally,
         // so no separate exist check is needed here — avoids the TOCTOU race condition.
         val privateFile = copyMediaUriToPrivateStorage(filename, mediaUri) ?: return
-        try { dao.updateFilePath(photoId, privateFile.absolutePath) } catch (_: Exception) { }
+        try {
+            dao.updateFilePath(photoId, privateFile.absolutePath)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "filePath migration update failed for photo $photoId", e)
+        }
     }
+
+    /** Byte size of the content behind [uri], or -1 when it can't be determined. */
+    private fun queryContentSize(uri: Uri): Long = try {
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
+    } catch (_: Exception) { -1L }
 
     private fun readPhotoDate(uri: Uri): Long? {
         context.contentResolver.query(
@@ -930,7 +1052,11 @@ class PhotoRepository @Inject constructor(
             bmp = rotated
         }
         bmp
-    } catch (_: Exception) { null }
+    } catch (e: Exception) {
+        // Surfaces to the user as StorageError — keep the cause findable.
+        android.util.Log.w(TAG, "decodeBitmapFromUri failed for $uri", e)
+        null
+    }
 
     /** Returns the largest power-of-2 inSampleSize that keeps the decoded image within maxW×maxH. */
     private fun calculateInSampleSize(width: Int, height: Int, maxWidth: Int, maxHeight: Int): Int {
@@ -988,7 +1114,12 @@ class PhotoRepository @Inject constructor(
         }
         val loc = fresh ?: client.lastLocation.await()
         Pair(loc?.latitude, loc?.longitude)
-    } catch (_: Exception) { Pair(null, null) }
+    } catch (e: Exception) {
+        // DEBUG: fires on every capture while location permission is denied — that's
+        // a normal state, not a fault, but the cause should still be findable.
+        android.util.Log.d(TAG, "getFreshLocation unavailable: $e")
+        Pair(null, null)
+    }
 
     /**
      * Fills in locationName after the photo row already exists and the result has

@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Least privilege (M-3): the ONLY content ever shared through the FileProvider is
+     the private photo store (ACTION_SEND from the gallery viewer and Stats screen).
+     Do not add broader roots (external-path, cache-path, …) without a concrete
+     caller — every mapping here is surface a minted URI could expose. -->
 <paths>
-    <external-path name="external_files" path="." />
-    <external-files-path name="app_external" path="." />
-    <cache-path name="cache" path="." />
-    <!-- Private photo storage — shared via ACTION_SEND from the Stats screen -->
+    <!-- Private photo storage — shared via ACTION_SEND -->
     <files-path name="photos" path="photos/" />
 </paths>

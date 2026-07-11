@@ -214,7 +214,7 @@ class CameraViewModelTest {
             latitude = null, longitude = null, locationName = null,
             dominantColorHex = "#1E88E5"
         )
-        coEvery { repo.getAllPhotosSnapshot() } returns listOf(photo)
+        coEvery { repo.getPhotoById(photoId) } returns photo
 
         var doneCalled = false
         val vm = buildViewModel()
@@ -228,7 +228,7 @@ class CameraViewModelTest {
 
     @Test
     fun saveNoteForPhoto_withNoMatchingPhoto_stillResetsToIdleAndCallsDone() = runTest {
-        coEvery { repo.getAllPhotosSnapshot() } returns emptyList()
+        coEvery { repo.getPhotoById(any()) } returns null
 
         var doneCalled = false
         val vm = buildViewModel()
@@ -238,6 +238,32 @@ class CameraViewModelTest {
         coVerify(exactly = 0) { repo.saveDescription(any(), any()) }
         assertEquals(CaptureState.Idle, vm.captureState.value)
         assertTrue(doneCalled)
+    }
+
+    // ── dismissNotePromptIfPending ───────────────────────────────────────────
+
+    @Test
+    fun dismissNotePromptIfPending_whenAwaitingNote_resetsToIdle() = runTest {
+        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.Success(
+            mockk(relaxed = true), successValidation(), photoId = 5L
+        )
+        val vm = buildViewModel()
+        vm.onPhotoCaptured(mockk(relaxed = true))
+        advanceUntilIdle()
+        assertTrue(vm.captureState.value is CaptureState.AwaitingNote)
+
+        // Swiping off the Camera pane with the prompt open must clear it, or the
+        // stale prompt re-mounts instead of the viewfinder on the next visit.
+        vm.dismissNotePromptIfPending()
+        assertEquals(CaptureState.Idle, vm.captureState.value)
+    }
+
+    @Test
+    fun dismissNotePromptIfPending_whenNotAwaitingNote_leavesStateUntouched() {
+        val vm = buildViewModel()
+        vm.startCapture() // Processing — must survive the pane leaving composition
+        vm.dismissNotePromptIfPending()
+        assertEquals(CaptureState.Processing, vm.captureState.value)
     }
 
     // ── startCapture / onCaptureError ────────────────────────────────────────

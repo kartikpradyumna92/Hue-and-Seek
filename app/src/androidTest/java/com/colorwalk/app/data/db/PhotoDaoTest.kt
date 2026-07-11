@@ -281,6 +281,37 @@ class PhotoDaoTest {
         assertEquals(0, dao.countByDateTaken(ts + 1000L))
     }
 
+    // ── getByDateTakenSecond (M-4 import-dedup guard) ─────────────────────────
+
+    @Test
+    fun getByDateTakenSecond_matchesAnyMillisWithinTheSecond() = runTest {
+        val ts = midnightToday() + 5000L // exactly on a second boundary
+        dao.insert(makeEntity(dateTaken = ts))
+        dao.insert(makeEntity(dateTaken = ts + 500L))
+        dao.insert(makeEntity(dateTaken = ts + 999L))
+        dao.insert(makeEntity(dateTaken = ts + 1000L)) // next second — must not match
+
+        val hits = dao.getByDateTakenSecond(ts / 1000)
+        assertEquals(3, hits.size)
+        assertTrue(hits.all { it.dateTaken / 1000 == ts / 1000 })
+    }
+
+    @Test
+    fun getByDateTakenSecond_noRowsInSecond_returnsEmpty() = runTest {
+        dao.insert(makeEntity(dateTaken = midnightToday() + 5000L))
+        assertTrue(dao.getByDateTakenSecond((midnightToday() + 10_000L) / 1000).isEmpty())
+    }
+
+    @Test
+    fun insert_persistsOriginalSizeBytes() = runTest {
+        dao.insert(makeEntity(dateTaken = midnightToday() + 1000L).copy(originalSizeBytes = 123_456L))
+        dao.insert(makeEntity(dateTaken = midnightToday() + 2000L)) // default null
+
+        val all = dao.getAllPhotosSnapshot().sortedBy { it.dateTaken }
+        assertEquals(123_456L, all[0].originalSizeBytes)
+        assertNull(all[1].originalSizeBytes)
+    }
+
     // ── countByColor ─────────────────────────────────────────────────────────
 
     @Test

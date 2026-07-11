@@ -14,5 +14,10 @@ data class PhotoEntity(
     val longitude: Double?,
     val locationName: String?,   // reverse-geocoded label
     val dominantColorHex: String, // actual dominant color of the captured photo
-    val description: String? = null  // user-written note; also written to EXIF ImageDescription
+    val description: String? = null,  // user-written note; also written to EXIF ImageDescription
+    // Byte size of the ORIGINAL source file at import time (null for in-app captures
+    // and legacy rows). The private copy is re-encoded, so its on-disk size can't
+    // identify the source — this column is what lets import dedup distinguish a
+    // re-import of the same photo from a different burst shot in the same second (M-4).
+    val originalSizeBytes: Long? = null
 )
