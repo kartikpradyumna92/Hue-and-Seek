@@ -87,13 +87,35 @@ fun GalleryScreen(
 
     // Full-screen viewer takes priority over everything
     if (viewerState != null) {
+        val shareContext = LocalContext.current
         PhotoViewerScreen(
             photos = viewerState!!.photos,
             initialIndex = viewerState!!.initialIndex,
             onClose = { viewModel.closePhoto() },
             onDelete = { viewModel.deletePhoto(it) },
             onRotate = { photo, onDone -> viewModel.rotatePhoto(photo, onDone) },
-            onSaveDescription = { photo, text -> viewModel.saveDescription(photo, text) }
+            onSaveDescription = { photo, text -> viewModel.saveDescription(photo, text) },
+            onPageChanged = { viewModel.onViewerPageChanged(it) },
+            onShare = { photo ->
+                // M-12: always share a private file through the FileProvider — legacy
+                // content:// rows are copied/migrated by the repository first, since
+                // read grants can't be minted for MediaStore URIs the app doesn't own.
+                viewModel.prepareShare(photo) { file ->
+                    if (file != null) {
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            shareContext, "${shareContext.packageName}.fileprovider", file
+                        )
+                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "image/jpeg"
+                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        try {
+                            shareContext.startActivity(android.content.Intent.createChooser(intent, null))
+                        } catch (_: Exception) { /* no share targets — never crash */ }
+                    }
+                }
+            }
         )
         return
     }

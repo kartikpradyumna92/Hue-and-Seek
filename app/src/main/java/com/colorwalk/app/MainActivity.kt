@@ -158,11 +158,16 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val activity = context as? android.app.Activity
                 LaunchedEffect(Unit) {
-                    if (activity != null &&
+                    // L-9: ask at most once — this LaunchedEffect re-fires on every
+                    // return to the home route, and if the permission was hard-denied
+                    // the request would otherwise repeat silently forever.
+                    val alreadyAsked = prefs.getBoolean("aml_requested", false)
+                    if (activity != null && !alreadyAsked &&
                         ContextCompat.checkSelfPermission(
                             context, Manifest.permission.ACCESS_MEDIA_LOCATION
                         ) != PackageManager.PERMISSION_GRANTED
                     ) {
+                        prefs.edit().putBoolean("aml_requested", true).apply()
                         ActivityCompat.requestPermissions(
                             activity, arrayOf(Manifest.permission.ACCESS_MEDIA_LOCATION), 0
                         )

@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.28.0] - 2026-07-12
+
+Audit close-out release: the July full-code review is now fully resolved — every remaining Medium and Low finding fixed, plus the structural and test-coverage improvements. 276 unit tests green.
+
+### Fixed
+- **Photos save the original camera bytes** — captures and imports previously went through a decode → re-encode round-trip that stripped all camera EXIF (orientation, capture time, device tags) and cost a JPEG generation. The HAL's original bytes are now written verbatim to both private storage and the gallery copy; rotation rides on the EXIF orientation tag instead of baked pixels.
+- **Selfies save as previewed** — front-camera captures are deterministically mirrored via an EXIF orientation flip (no re-encode) so the stored photo matches what the viewfinder showed.
+- **Success card appears instantly after the shutter** — the save no longer waits up to 5 seconds for a GPS fix; coordinates, the gallery publish, and the geocode all arrive as background patches moments later.
+- **Sharing works for pre-migration photos** — legacy rows still pointing at content:// URIs are copied into private storage on share (completing their migration) so every share goes through the FileProvider; previously the receiving app silently got nothing.
+- **Gallery viewer tracks your real position** — deleting mid-browse now lands on the deleted photo's neighbor, and viewer recreation (e.g. rotation) restores the page you were actually on, not the photo you opened with.
+- **Video files can no longer sniff as images** — the import integrity check's ISO-BMFF detection is restricted to real HEIF/AVIF image brands.
+- **Home clock ticks on the minute boundary** (was up to 59s stale); **EXIF/filename date parsing is strict** (garbage dates fail instead of rolling over into plausible ones); **reminder receiver can't leak its broadcast on an exception**; **ACCESS_MEDIA_LOCATION is requested once**, not on every return to Home; **exact-alarm permission grants take effect immediately** via the system broadcast.
+
+### Security
+- Canonical-path containment check on every write into the private photo store (path-traversal hardening).
+- New docs/security-posture.md — the audit's verified invariants (attack surface, data handling, privacy behaviors, build hygiene) as a review checklist for future changes.
+- docs/play-data-safety.md re-verified against current code; added the missing "Other user-generated content" declaration for photo notes and documented the exact Auto Backup scope.
+
+### Code quality
+- **PhotoRepository split** (was ~1,050 lines) into focused units: PhotoFileStore (private storage + bounded decodes), LocationResolver (GPS/geocoding), MediaStoreGallery (public-album publish/describe/delete), and GallerySynchronizer (three-pass startup sync) — public API unchanged, no caller touched.
+- **Shared gesture primitives** — SwipePhysics.OnePageDragSession now carries the drag bookkeeping for all four hub edges, Home's axis-locked drag, and the onboarding pager; a shared pinchScaleFactor() serves the camera zoom and photo viewers (~130 duplicated lines removed, behavior identical).
+- Removed the redundant Home ON_RESUME reload (covered by DB emissions + the day-rollover watcher) and a dead tombstone-clear call.
+
+### Tests
+- 276 unit tests (+17): savePhoto/importPhoto result paths via injected fake collaborators (decode-fail, validation-fail, write-fail, happy path, import dedup accept/reject), AlarmScheduler trigger arithmetic (incl. New-Year rollover), sync filename-date parsing, and MP4-rejection/AVIF sniff cases.
+
+---
+
 ## [1.27.0] - 2026-07-11
 
 End-of-day gentle nudge, camera note-prompt fix, and the second wave of audit hardening (8 Medium findings fixed; only 2 remain open).

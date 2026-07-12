@@ -20,6 +20,9 @@ class StreakReminderReceiver : BroadcastReceiver() {
         val slot = intent.getStringExtra(AlarmScheduler.EXTRA_SLOT) ?: AlarmScheduler.SLOT_MORNING
         val pendingResult = goAsync()
         GlobalScope.launch(Dispatchers.IO) {
+            // L-7: an uncaught exception here would leak the pending result until the
+            // ~10s ANR window; catch, log, and always finish() — worst case one
+            // reminder is skipped and the reschedule below still re-arms tomorrow.
             try {
                 // M-5: with notifications revoked at the OS level, notify() is
                 // silently dropped — skip the DB reads entirely, but still fall
@@ -56,6 +59,8 @@ class StreakReminderReceiver : BroadcastReceiver() {
                             AlarmScheduler.refreshLastChance(context) // self-gates on prefs
                     }
                 }
+            } catch (e: Exception) {
+                android.util.Log.e("StreakReminderReceiver", "Reminder handling failed for slot $slot", e)
             } finally {
                 pendingResult.finish()
             }

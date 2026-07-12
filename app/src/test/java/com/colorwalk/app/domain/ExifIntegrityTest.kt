@@ -49,6 +49,27 @@ class ExifIntegrityTest {
     }
 
     @Test
+    fun sniff_mp4VideoFtypBrands_areRejected() {
+        // L-5: a bare 'ftyp' box is also how MP4/MOV video starts — only known
+        // HEIF-image brands may sniff as images.
+        for (videoBrand in listOf("isom", "mp42", "qt  ")) {
+            val header = ByteArray(16)
+            "ftyp$videoBrand".forEachIndexed { i, c -> header[4 + i] = c.code.toByte() }
+            assertNull(
+                "'$videoBrand' is a video brand and must not sniff as HEIF",
+                ExifIntegrity.sniffFormat(header)
+            )
+        }
+    }
+
+    @Test
+    fun sniff_avifFtypBox_isHeif() {
+        val header = ByteArray(16)
+        "ftypavif".forEachIndexed { i, c -> header[4 + i] = c.code.toByte() }
+        assertEquals(ExifIntegrity.Format.HEIF, ExifIntegrity.sniffFormat(header))
+    }
+
+    @Test
     fun sniff_textFileRenamedToJpg_isRejected() {
         // "Hello world…" bytes — no image container regardless of what the filename claims.
         val header = "Hello world, not an image".toByteArray().copyOf(16)

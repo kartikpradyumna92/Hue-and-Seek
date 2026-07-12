@@ -60,6 +60,10 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <!-- API 31+: fired when the user grants SCHEDULE_EXACT_ALARM in system
+                     settings; reschedule immediately so reminders upgrade from the
+                     inexact setWindow fallback without waiting for the next re-arm (L-10). -->
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
 

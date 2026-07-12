@@ -84,9 +84,7 @@ fun ZoomableAsyncImage(
                                 event.changes.forEach { it.consume() }
                                 val c1 = pressed[0]
                                 val c2 = pressed[1]
-                                val prevDist = (c1.previousPosition - c2.previousPosition).getDistance()
-                                val currDist = (c1.position - c2.position).getDistance()
-                                val zoomFactor = if (prevDist > 0f) currDist / prevDist else 1f
+                                val zoomFactor = pinchScaleFactor(c1, c2)
                                 val prevCentroid = (c1.previousPosition + c2.previousPosition) / 2f
                                 val currCentroid = (c1.position + c2.position) / 2f
                                 val panDelta = currCentroid - prevCentroid

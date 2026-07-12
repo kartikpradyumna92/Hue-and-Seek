@@ -1,6 +1,5 @@
 package com.colorwalk.app.viewmodel
 
-import android.graphics.Bitmap
 import android.net.Uri
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.data.repository.ImportResult
@@ -28,12 +27,11 @@ class CameraViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     private lateinit var repo: PhotoRepository
-    private lateinit var bitmap: Bitmap
+    private val jpegBytes = byteArrayOf(1, 2, 3)
 
     @Before
     fun setUp() {
         repo = mockk(relaxed = true)
-        bitmap = mockk(relaxed = true)
     }
 
     private fun buildViewModel() = CameraViewModel(repo)
@@ -92,13 +90,13 @@ class CameraViewModelTest {
 
     @Test
     fun onPhotoCaptured_immediatelyTransitionsToProcessing() = runTest {
-        coEvery { repo.savePhoto(any(), any()) } coAnswers {
+        coEvery { repo.savePhoto(any(), any(), any()) } coAnswers {
             kotlinx.coroutines.delay(10_000)
             SaveResult.StorageError
         }
 
         val vm = buildViewModel()
-        vm.onPhotoCaptured(bitmap)
+        vm.onPhotoCaptured(jpegBytes)
 
         assertEquals(CaptureState.Processing, vm.captureState.value)
     }
@@ -108,10 +106,10 @@ class CameraViewModelTest {
         val dominantHex = "#FF0000"
         val photoId = 42L
         val uri = mockk<Uri>(relaxed = true)
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.Success(uri, successValidation(dominantHex), photoId)
+        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.Success(uri, successValidation(dominantHex), photoId)
 
         val vm = buildViewModel()
-        vm.onPhotoCaptured(bitmap)
+        vm.onPhotoCaptured(jpegBytes)
         advanceUntilIdle()
 
         val state = vm.captureState.value
@@ -124,10 +122,10 @@ class CameraViewModelTest {
 
     @Test
     fun onPhotoCaptured_withValidationFailedResult_transitionsToFailedWithCorrectValues() = runTest {
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
+        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
 
         val vm = buildViewModel()
-        vm.onPhotoCaptured(bitmap)
+        vm.onPhotoCaptured(jpegBytes)
         advanceUntilIdle()
 
         val state = vm.captureState.value
@@ -141,10 +139,10 @@ class CameraViewModelTest {
 
     @Test
     fun onPhotoCaptured_withStorageError_transitionsToStorageError() = runTest {
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.StorageError
+        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.StorageError
 
         val vm = buildViewModel()
-        vm.onPhotoCaptured(bitmap)
+        vm.onPhotoCaptured(jpegBytes)
         advanceUntilIdle()
 
         assertEquals(CaptureState.StorageError, vm.captureState.value)
@@ -244,11 +242,11 @@ class CameraViewModelTest {
 
     @Test
     fun dismissNotePromptIfPending_whenAwaitingNote_resetsToIdle() = runTest {
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.Success(
+        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.Success(
             mockk(relaxed = true), successValidation(), photoId = 5L
         )
         val vm = buildViewModel()
-        vm.onPhotoCaptured(mockk(relaxed = true))
+        vm.onPhotoCaptured(jpegBytes)
         advanceUntilIdle()
         assertTrue(vm.captureState.value is CaptureState.AwaitingNote)
 
@@ -296,10 +294,10 @@ class CameraViewModelTest {
     @Test
     fun resetState_fromAwaitingNote_transitionsBackToIdle() = runTest {
         val uri = mockk<Uri>(relaxed = true)
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.Success(uri, successValidation(), 1L)
+        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.Success(uri, successValidation(), 1L)
 
         val vm = buildViewModel()
-        vm.onPhotoCaptured(bitmap)
+        vm.onPhotoCaptured(jpegBytes)
         advanceUntilIdle()
         assertTrue(vm.captureState.value is CaptureState.AwaitingNote)
 
@@ -310,10 +308,10 @@ class CameraViewModelTest {
 
     @Test
     fun resetState_fromFailed_transitionsBackToIdle() = runTest {
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
+        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
 
         val vm = buildViewModel()
-        vm.onPhotoCaptured(bitmap)
+        vm.onPhotoCaptured(jpegBytes)
         advanceUntilIdle()
         assertTrue(vm.captureState.value is CaptureState.Failed)
 
@@ -324,10 +322,10 @@ class CameraViewModelTest {
 
     @Test
     fun resetState_fromStorageError_transitionsBackToIdle() = runTest {
-        coEvery { repo.savePhoto(any(), any()) } returns SaveResult.StorageError
+        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.StorageError
 
         val vm = buildViewModel()
-        vm.onPhotoCaptured(bitmap)
+        vm.onPhotoCaptured(jpegBytes)
         advanceUntilIdle()
 
         vm.resetState()

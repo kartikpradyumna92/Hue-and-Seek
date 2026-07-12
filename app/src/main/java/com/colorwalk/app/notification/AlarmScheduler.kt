@@ -133,24 +133,33 @@ object AlarmScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val trigger = Calendar.getInstance().apply {
+        val triggerMillis = nextTriggerMillis(hour, minute)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMillis, intent)
+            } else {
+                alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerMillis - 7 * 60 * 1000L, 15 * 60 * 1000L, intent)
+            }
+        } else {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMillis, intent)
+        }
+    }
+
+    /**
+     * Next occurrence of the local wall-clock time [hour]:[minute] strictly after
+     * [nowMillis] — today if still ahead, otherwise the same time tomorrow.
+     * Pure (I-6: JVM-tested) — the Calendar handles month/year/DST rollover.
+     */
+    internal fun nextTriggerMillis(hour: Int, minute: Int, nowMillis: Long = System.currentTimeMillis()): Long =
+        Calendar.getInstance().apply {
+            timeInMillis = nowMillis
             set(Calendar.HOUR_OF_DAY, hour)
             set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-            if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (alarmManager.canScheduleExactAlarms()) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger.timeInMillis, intent)
-            } else {
-                alarmManager.setWindow(AlarmManager.RTC_WAKEUP, trigger.timeInMillis - 7 * 60 * 1000L, 15 * 60 * 1000L, intent)
-            }
-        } else {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger.timeInMillis, intent)
-        }
-    }
+            if (timeInMillis <= nowMillis) add(Calendar.DAY_OF_YEAR, 1)
+        }.timeInMillis
 
     private fun cancelOne(context: Context, requestCode: Int, slot: String) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)

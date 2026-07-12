@@ -1,7 +1,5 @@
 package com.colorwalk.app.ui.gallery
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,7 +40,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.FileProvider
 import coil.imageLoader
 import coil.memory.MemoryCache
 import com.colorwalk.app.data.db.PhotoEntity
@@ -50,7 +47,6 @@ import com.colorwalk.app.ui.components.ZoomableAsyncImage
 import com.colorwalk.app.ui.components.ZoomState
 import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.photoImageRequest
-import java.io.File as JavaFile
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -64,15 +60,21 @@ fun PhotoViewerScreen(
     onClose: () -> Unit,
     onDelete: (PhotoEntity) -> Unit,
     onRotate: (PhotoEntity, onDone: () -> Unit) -> Unit,
-    onSaveDescription: (PhotoEntity, String?) -> Unit = { _, _ -> }
+    onSaveDescription: (PhotoEntity, String?) -> Unit = { _, _ -> },
+    onShare: (PhotoEntity) -> Unit = {},
+    onPageChanged: (Int) -> Unit = {}
 ) {
     // Photos already arrive newest-first; page 0 = newest.
     // Swiping left → higher page index → older photo (standard photo-app convention).
     val pagerState = rememberPagerState(initialPage = initialIndex) { photos.size }
 
-    // Reset zoom and pan whenever the visible page changes
+    // Reset zoom and pan whenever the visible page changes, and tell the owner where
+    // the user actually is (M-11) — delete and viewer recreation depend on it.
     val zoomState = remember { ZoomState() }
-    LaunchedEffect(pagerState.currentPage) { zoomState.reset() }
+    LaunchedEffect(pagerState.currentPage) {
+        zoomState.reset()
+        onPageChanged(pagerState.currentPage)
+    }
 
     // When a photo is deleted the list shrinks before the pager settles on the new
     // last page. Snap immediately so currentPage is never out-of-bounds.
@@ -171,7 +173,7 @@ fun PhotoViewerScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 IconButton(
-                    onClick = { sharePhoto(context, currentPhoto) },
+                    onClick = { onShare(currentPhoto) },
                     modifier = Modifier
                         .size(48.dp)
                         .clip(CircleShape)
@@ -481,20 +483,3 @@ fun PhotoViewerScreen(
     }
 }
 
-private fun sharePhoto(context: android.content.Context, photo: PhotoEntity) {
-    val shareUri: Uri = if (photo.filePath.startsWith("/")) {
-        FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            JavaFile(photo.filePath)
-        )
-    } else {
-        Uri.parse(photo.filePath)
-    }
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "image/jpeg"
-        putExtra(Intent.EXTRA_STREAM, shareUri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    context.startActivity(Intent.createChooser(intent, null))
-}

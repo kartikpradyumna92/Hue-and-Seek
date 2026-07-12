@@ -16,7 +16,10 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
             Intent.ACTION_TIME_CHANGED,        // manifest action android.intent.action.TIME_SET
-            Intent.ACTION_TIMEZONE_CHANGED -> {
+            Intent.ACTION_TIMEZONE_CHANGED,
+            // L-10: user granted SCHEDULE_EXACT_ALARM (API 31+) — re-arm now so
+            // reminders upgrade from the inexact setWindow fallback immediately.
+            "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" -> {
                 if (NotificationPrefs.isEnabled(context)) {
                     AlarmScheduler.scheduleBoth(context)
                 }

@@ -44,7 +44,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.colorwalk.app.domain.StreakCalculator
@@ -117,15 +116,11 @@ fun HomeScreen(
     val color = state.colorOfDay
     val context = LocalContext.current
 
-    // Refresh state whenever the screen resumes (e.g. returning from camera)
+    // (I-3: no ON_RESUME reload anymore — captures/deletes reach the ViewModel via
+    // Room emissions, and day rollover — including resuming after midnight — is
+    // caught by the minute ticker below, which repeatOnLifecycle restarts with a
+    // fresh timestamp on every resume.)
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) viewModel.load()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
 
     // In-app review — fires once after first 7-day streak
     val reviewManager = remember { ReviewManagerFactory.create(context) }
@@ -152,7 +147,9 @@ fun HomeScreen(
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
                 now = System.currentTimeMillis()
-                delay(60_000L)
+                // Sleep to the next minute BOUNDARY, not a fixed 60s — a fixed period
+                // started mid-minute leaves the displayed time up to 59s stale (L-1).
+                delay(60_000L - (now % 60_000L))
             }
         }
     }

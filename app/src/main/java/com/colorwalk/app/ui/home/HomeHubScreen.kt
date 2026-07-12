@@ -130,40 +130,26 @@ fun HomeHubScreen(
     val homeDragModifier = Modifier.pointerInput(viewportW, viewportH) {
         if (viewportW <= 0 || viewportH <= 0) return@pointerInput
         var axis = 0 // 0 = undecided, 1 = horizontal, 2 = vertical
-        var startX = 0f; var startY = 0f
-        var clampMinX = 0f; var clampMaxX = 0f
-        var clampMinY = 0f; var clampMaxY = 0f
-        var totalX = 0f; var totalY = 0f
-        val velocityTracker = SwipePhysics.VelocityEstimator()
+        var totalX = 0f; var totalY = 0f // raw totals drive ONLY the axis decision
+        val sessionX = SwipePhysics.OnePageDragSession()
+        val sessionY = SwipePhysics.OnePageDragSession()
         detectDragGestures(
             onDragStart = {
                 axis = 0
-                startX = dragX.value; startY = dragY.value
-                clampMinX = (startX - viewportW).coerceAtLeast(-viewportW.toFloat())
-                clampMaxX = (startX + viewportW).coerceAtMost(viewportW.toFloat())
-                clampMinY = (startY - viewportH).coerceAtLeast(-viewportH.toFloat())
-                clampMaxY = (startY + viewportH).coerceAtMost(viewportH.toFloat())
                 totalX = 0f; totalY = 0f
-                velocityTracker.reset()
+                sessionX.begin(dragX.value, viewportW, -viewportW.toFloat(), viewportW.toFloat())
+                sessionY.begin(dragY.value, viewportH, -viewportH.toFloat(), viewportH.toFloat())
             },
             onDragEnd = {
                 when (axis) {
-                    1 -> settleX(
-                        startX,
-                        SwipePhysics.settleTarget(startX, clampMinX, clampMaxX, totalX, velocityTracker.value, viewportW),
-                        velocityTracker.value
-                    )
-                    2 -> settleY(
-                        startY,
-                        SwipePhysics.settleTarget(startY, clampMinY, clampMaxY, totalY, velocityTracker.value, viewportH),
-                        velocityTracker.value
-                    )
+                    1 -> settleX(sessionX.startValue, sessionX.settleTarget(viewportW), sessionX.releaseVelocity)
+                    2 -> settleY(sessionY.startValue, sessionY.settleTarget(viewportH), sessionY.releaseVelocity)
                 }
             },
             onDragCancel = {
                 when (axis) {
-                    1 -> settleX(startX, startX, 0f)
-                    2 -> settleY(startY, startY, 0f)
+                    1 -> settleX(sessionX.startValue, sessionX.startValue, 0f)
+                    2 -> settleY(sessionY.startValue, sessionY.startValue, 0f)
                 }
             }
         ) { change, dragAmount ->
@@ -172,16 +158,17 @@ fun HomeHubScreen(
             totalY += dragAmount.y
             if (axis == 0 && (abs(totalX) > AXIS_LOCK_PX || abs(totalY) > AXIS_LOCK_PX)) {
                 axis = if (abs(totalX) > abs(totalY)) 1 else 2
+                // Fold the pre-lock travel into the chosen session so the page
+                // doesn't jump by the slop distance (velocity baseline only —
+                // the estimator ignores its first sample).
+                when (axis) {
+                    1 -> scope.launch { dragX.snapTo(sessionX.update(totalX - dragAmount.x, change.uptimeMillis)) }
+                    2 -> scope.launch { dragY.snapTo(sessionY.update(totalY - dragAmount.y, change.uptimeMillis)) }
+                }
             }
             when (axis) {
-                1 -> {
-                    velocityTracker.update(dragAmount.x, change.uptimeMillis)
-                    scope.launch { dragX.snapTo((startX + totalX).coerceIn(clampMinX, clampMaxX)) }
-                }
-                2 -> {
-                    velocityTracker.update(dragAmount.y, change.uptimeMillis)
-                    scope.launch { dragY.snapTo((startY + totalY).coerceIn(clampMinY, clampMaxY)) }
-                }
+                1 -> scope.launch { dragX.snapTo(sessionX.update(dragAmount.x, change.uptimeMillis)) }
+                2 -> scope.launch { dragY.snapTo(sessionY.update(dragAmount.y, change.uptimeMillis)) }
             }
         }
     }
@@ -190,58 +177,28 @@ fun HomeHubScreen(
     // content of their own, so they read the raw pointer stream directly.
     val cameraDragModifier = Modifier.pointerInput(viewportW) {
         if (viewportW <= 0) return@pointerInput
-        var startX = 0f; var clampMinX = 0f; var clampMaxX = 0f; var totalX = 0f
-        val velocityTracker = SwipePhysics.VelocityEstimator()
+        val session = SwipePhysics.OnePageDragSession()
         detectHorizontalDragGestures(
-            onDragStart = {
-                startX = dragX.value
-                clampMinX = (startX - viewportW).coerceAtLeast(-viewportW.toFloat())
-                clampMaxX = (startX + viewportW).coerceAtMost(viewportW.toFloat())
-                totalX = 0f
-                velocityTracker.reset()
-            },
-            onDragEnd = {
-                settleX(
-                    startX,
-                    SwipePhysics.settleTarget(startX, clampMinX, clampMaxX, totalX, velocityTracker.value, viewportW),
-                    velocityTracker.value
-                )
-            },
-            onDragCancel = { settleX(startX, startX, 0f) }
+            onDragStart = { session.begin(dragX.value, viewportW, -viewportW.toFloat(), viewportW.toFloat()) },
+            onDragEnd = { settleX(session.startValue, session.settleTarget(viewportW), session.releaseVelocity) },
+            onDragCancel = { settleX(session.startValue, session.startValue, 0f) }
         ) { change, dragAmount ->
             change.consume()
-            totalX += dragAmount
-            velocityTracker.update(dragAmount, change.uptimeMillis)
-            val target = (startX + totalX).coerceIn(clampMinX, clampMaxX)
+            val target = session.update(dragAmount, change.uptimeMillis)
             scope.launch { dragX.snapTo(target) }
         }
     }
 
     val settingsDragModifier = Modifier.pointerInput(viewportH) {
         if (viewportH <= 0) return@pointerInput
-        var startY = 0f; var clampMinY = 0f; var clampMaxY = 0f; var totalY = 0f
-        val velocityTracker = SwipePhysics.VelocityEstimator()
+        val session = SwipePhysics.OnePageDragSession()
         detectVerticalDragGestures(
-            onDragStart = {
-                startY = dragY.value
-                clampMinY = (startY - viewportH).coerceAtLeast(-viewportH.toFloat())
-                clampMaxY = (startY + viewportH).coerceAtMost(viewportH.toFloat())
-                totalY = 0f
-                velocityTracker.reset()
-            },
-            onDragEnd = {
-                settleY(
-                    startY,
-                    SwipePhysics.settleTarget(startY, clampMinY, clampMaxY, totalY, velocityTracker.value, viewportH),
-                    velocityTracker.value
-                )
-            },
-            onDragCancel = { settleY(startY, startY, 0f) }
+            onDragStart = { session.begin(dragY.value, viewportH, -viewportH.toFloat(), viewportH.toFloat()) },
+            onDragEnd = { settleY(session.startValue, session.settleTarget(viewportH), session.releaseVelocity) },
+            onDragCancel = { settleY(session.startValue, session.startValue, 0f) }
         ) { change, dragAmount ->
             change.consume()
-            totalY += dragAmount
-            velocityTracker.update(dragAmount, change.uptimeMillis)
-            val target = (startY + totalY).coerceIn(clampMinY, clampMaxY)
+            val target = session.update(dragAmount, change.uptimeMillis)
             scope.launch { dragY.snapTo(target) }
         }
     }
@@ -250,56 +207,28 @@ fun HomeHubScreen(
     // drag modifier that would fight those internal gestures — they report drag deltas
     // (with event timestamps, for the velocity estimate) via callback from their own
     // proven edge-detection gestures.
-    var galleryStart by remember { mutableFloatStateOf(0f) }
-    var galleryClampMin by remember { mutableFloatStateOf(0f) }
-    var galleryClampMax by remember { mutableFloatStateOf(0f) }
-    var galleryTotal by remember { mutableFloatStateOf(0f) }
-    val galleryVelocity = remember { SwipePhysics.VelocityEstimator() }
-
+    val gallerySession = remember { SwipePhysics.OnePageDragSession() }
     fun onGalleryEdgeDragStart() {
-        galleryStart = dragX.value
-        galleryClampMin = (galleryStart - viewportW).coerceAtLeast(-viewportW.toFloat())
-        galleryClampMax = (galleryStart + viewportW).coerceAtMost(viewportW.toFloat())
-        galleryTotal = 0f
-        galleryVelocity.reset()
+        gallerySession.begin(dragX.value, viewportW, -viewportW.toFloat(), viewportW.toFloat())
     }
     fun onGalleryEdgeDrag(dx: Float, uptimeMillis: Long) {
-        galleryTotal += dx
-        galleryVelocity.update(dx, uptimeMillis)
-        scope.launch { dragX.snapTo((galleryStart + galleryTotal).coerceIn(galleryClampMin, galleryClampMax)) }
+        val target = gallerySession.update(dx, uptimeMillis)
+        scope.launch { dragX.snapTo(target) }
     }
     fun onGalleryEdgeDragEnd() {
-        settleX(
-            galleryStart,
-            SwipePhysics.settleTarget(galleryStart, galleryClampMin, galleryClampMax, galleryTotal, galleryVelocity.value, viewportW),
-            galleryVelocity.value
-        )
+        settleX(gallerySession.startValue, gallerySession.settleTarget(viewportW), gallerySession.releaseVelocity)
     }
 
-    var newsfeedStart by remember { mutableFloatStateOf(0f) }
-    var newsfeedClampMin by remember { mutableFloatStateOf(0f) }
-    var newsfeedClampMax by remember { mutableFloatStateOf(0f) }
-    var newsfeedTotal by remember { mutableFloatStateOf(0f) }
-    val newsfeedVelocity = remember { SwipePhysics.VelocityEstimator() }
-
+    val newsfeedSession = remember { SwipePhysics.OnePageDragSession() }
     fun onNewsfeedEdgeDragStart() {
-        newsfeedStart = dragY.value
-        newsfeedClampMin = (newsfeedStart - viewportH).coerceAtLeast(-viewportH.toFloat())
-        newsfeedClampMax = (newsfeedStart + viewportH).coerceAtMost(viewportH.toFloat())
-        newsfeedTotal = 0f
-        newsfeedVelocity.reset()
+        newsfeedSession.begin(dragY.value, viewportH, -viewportH.toFloat(), viewportH.toFloat())
     }
     fun onNewsfeedEdgeDrag(dy: Float, uptimeMillis: Long) {
-        newsfeedTotal += dy
-        newsfeedVelocity.update(dy, uptimeMillis)
-        scope.launch { dragY.snapTo((newsfeedStart + newsfeedTotal).coerceIn(newsfeedClampMin, newsfeedClampMax)) }
+        val target = newsfeedSession.update(dy, uptimeMillis)
+        scope.launch { dragY.snapTo(target) }
     }
     fun onNewsfeedEdgeDragEnd() {
-        settleY(
-            newsfeedStart,
-            SwipePhysics.settleTarget(newsfeedStart, newsfeedClampMin, newsfeedClampMax, newsfeedTotal, newsfeedVelocity.value, viewportH),
-            newsfeedVelocity.value
-        )
+        settleY(newsfeedSession.startValue, newsfeedSession.settleTarget(viewportH), newsfeedSession.releaseVelocity)
     }
 
     BackHandler(enabled = dragX.value != 0f || dragY.value != 0f) {

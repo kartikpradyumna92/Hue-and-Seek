@@ -2,8 +2,6 @@ package com.colorwalk.app.ui.camera
 
 import android.Manifest
 import android.content.Intent
-import android.graphics.BitmapFactory
-import androidx.exifinterface.media.ExifInterface
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
@@ -221,14 +219,8 @@ fun CameraScreen(
                         if (pressed.isEmpty()) break
                         if (pressed.size >= 2) {
                             event.changes.forEach { it.consume() }
-                            val c1 = pressed[0]
-                            val c2 = pressed[1]
-                            val prevDist = (c1.previousPosition - c2.previousPosition).getDistance()
-                            val currDist = (c1.position - c2.position).getDistance()
-                            if (prevDist > 0f) {
-                                requestedZoom = (requestedZoom * (currDist / prevDist))
-                                    .coerceIn(minZoom, maxZoom)
-                            }
+                            requestedZoom = (requestedZoom * com.colorwalk.app.ui.components.pinchScaleFactor(pressed[0], pressed[1]))
+                                .coerceIn(minZoom, maxZoom)
                         }
                     }
                 }
@@ -485,52 +477,20 @@ fun CameraScreen(
                                 cameraExecutor,
                                 object : ImageCapture.OnImageCapturedCallback() {
                                     override fun onCaptureSuccess(proxy: ImageProxy) {
+                                        // Hand the HAL's original JPEG bytes straight to the
+                                        // repository (L-2): they're written to disk verbatim, so
+                                        // EXIF (orientation, capture time, device tags) survives
+                                        // and there's no re-encode generation. Bounded decode for
+                                        // validation (H-3) and decode-failure handling (H-2) live
+                                        // in the repository with the rest of the save pipeline.
                                         val buffer = proxy.planes[0].buffer
                                         val bytes = ByteArray(buffer.remaining())
                                         buffer.get(bytes)
-                                        val cameraXRotation = proxy.imageInfo.rotationDegrees
                                         proxy.close()
-                                        // Bounded two-pass decode, mirroring the import path:
-                                        // ImageCapture delivers max sensor resolution, and an
-                                        // unbounded decode plus the rotation copy below peaks at
-                                        // 2 full ARGB bitmaps — hundreds of MB on a 50MP+ sensor,
-                                        // a straight OOM crash at the shutter (H-3). 4096px is
-                                        // ample for validation and the saved JPEG.
-                                        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOpts)
-                                        val decodeOpts = BitmapFactory.Options().apply {
-                                            inSampleSize = calculateInSampleSize(boundsOpts.outWidth, boundsOpts.outHeight, 4096, 4096)
-                                        }
-                                        // A failed decode (corrupt HAL output, OOM on the byte
-                                        // array) must reset Processing, or the spinner shows
-                                        // forever with no way to retake the photo (H-2).
-                                        var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
-                                            ?: run {
-                                                Log.e("CameraScreen", "Captured JPEG failed to decode")
-                                                viewModel.onCaptureError()
-                                                return
-                                            }
-                                        // Prefer EXIF orientation embedded in the JPEG by the camera HAL
-                                        // (reflects actual device orientation at capture time). Fall back
-                                        // to CameraX rotationDegrees only if EXIF tag is absent.
-                                        val exifOrientation = try {
-                                            ExifInterface(bytes.inputStream())
-                                                .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED)
-                                        } catch (_: Exception) { ExifInterface.ORIENTATION_UNDEFINED }
-                                        val rotation = when (exifOrientation) {
-                                            ExifInterface.ORIENTATION_ROTATE_90  -> 90f
-                                            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                                            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                                            ExifInterface.ORIENTATION_NORMAL     -> 0f
-                                            else -> cameraXRotation.toFloat()
-                                        }
-                                        if (rotation != 0f) {
-                                            val matrix = android.graphics.Matrix().apply { postRotate(rotation) }
-                                            val rotated = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
-                                            bmp.recycle()
-                                            bmp = rotated
-                                        }
-                                        viewModel.onPhotoCaptured(bmp)
+                                        // Front captures arrive un-mirrored from the HAL; flag
+                                        // them so the save mirrors the EXIF orientation and the
+                                        // stored selfie matches what the preview showed (L-3).
+                                        viewModel.onPhotoCaptured(bytes, mirror = useFrontCamera)
                                     }
                                     override fun onError(e: ImageCaptureException) {
                                         Log.e("CameraScreen", "Capture error", e)
@@ -1038,18 +998,3 @@ private fun parseResultHex(hex: String): Color = try {
     Color(android.graphics.Color.parseColor(hex))
 } catch (_: Exception) { Color.Gray }
 
-/**
- * Largest power-of-2 inSampleSize keeping the decode within maxW×maxH — identical
- * to the import path's bound in PhotoRepository, applied here to shutter captures.
- */
-private fun calculateInSampleSize(width: Int, height: Int, maxWidth: Int, maxHeight: Int): Int {
-    var inSampleSize = 1
-    if (height > maxHeight || width > maxWidth) {
-        val halfHeight = height / 2
-        val halfWidth = width / 2
-        while (halfHeight / inSampleSize >= maxHeight && halfWidth / inSampleSize >= maxWidth) {
-            inSampleSize *= 2
-        }
-    }
-    return inSampleSize
-}

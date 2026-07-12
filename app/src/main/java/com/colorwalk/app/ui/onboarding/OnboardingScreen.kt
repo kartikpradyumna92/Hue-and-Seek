@@ -136,32 +136,21 @@ fun OnboardingScreen(onFinish: () -> Unit) {
     val pagingDragModifier = Modifier.pointerInput(viewportW) {
         if (viewportW <= 0) return@pointerInput
         val stripMin = -(pages.lastIndex) * viewportW.toFloat()
-        var start = 0f
-        var clampMin = 0f
-        var clampMax = 0f
-        var totalX = 0f
-        val velocityTracker = SwipePhysics.VelocityEstimator()
+        // Same per-gesture rule as the hub, via the shared session (I-2): at most one
+        // page of travel from wherever THIS gesture started, intersected with the
+        // strip's ends.
+        val session = SwipePhysics.OnePageDragSession()
         detectHorizontalDragGestures(
-            onDragStart = {
-                // Same per-gesture rule as the hub: at most one page of travel from
-                // wherever THIS gesture started, intersected with the strip's ends.
-                start = dragX.value
-                clampMin = (start - viewportW).coerceAtLeast(stripMin)
-                clampMax = (start + viewportW).coerceAtMost(0f)
-                totalX = 0f
-                velocityTracker.reset()
-            },
+            onDragStart = { session.begin(dragX.value, viewportW, stripMin, 0f) },
             onDragEnd = {
-                val target = SwipePhysics.settleTarget(start, clampMin, clampMax, totalX, velocityTracker.value, viewportW)
+                val target = session.settleTarget(viewportW)
                 val targetPage = (-target / viewportW).roundToInt().coerceIn(0, pages.lastIndex)
-                settleTo(targetPage, velocityTracker.value, committed = target != start)
+                settleTo(targetPage, session.releaseVelocity, committed = target != session.startValue)
             },
             onDragCancel = { settleTo(pageIndex, 0f, committed = false) }
         ) { change, dragAmount ->
             change.consume()
-            totalX += dragAmount
-            velocityTracker.update(dragAmount, change.uptimeMillis)
-            val target = (start + totalX).coerceIn(clampMin, clampMax)
+            val target = session.update(dragAmount, change.uptimeMillis)
             scope.launch { dragX.snapTo(target) }
         }
     }

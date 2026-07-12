@@ -235,7 +235,32 @@ class GalleryViewModel @Inject constructor(
         if (idx >= 0) _viewerState.value = PhotoViewerState(photos, idx)
     }
 
+    /**
+     * The pager reports every page settle here (M-11): deletePhoto below and any
+     * viewer recreation (config change wipes the pager's remembered page) must work
+     * from where the user actually IS, not the photo the viewer was opened on.
+     */
+    fun onViewerPageChanged(index: Int) {
+        val vs = _viewerState.value ?: return
+        if (index != vs.initialIndex && index in vs.photos.indices) {
+            _viewerState.value = vs.copy(initialIndex = index)
+        }
+    }
+
     fun closePhoto() { _viewerState.value = null }
+
+    /**
+     * Resolves a photo to a private, FileProvider-shareable file (M-12). Legacy
+     * content:// rows are copied into private storage first — the app cannot grant
+     * read permission on a MediaStore URI it doesn't own, so sharing those raw URIs
+     * failed silently in the receiving app. [onReady] is invoked on the main thread
+     * with null when the photo's bytes can't be obtained at all.
+     */
+    fun prepareShare(photo: PhotoEntity, onReady: (java.io.File?) -> Unit) {
+        viewModelScope.launch {
+            onReady(repo.resolveShareFile(photo))
+        }
+    }
 
     fun saveDescription(photo: PhotoEntity, text: String?) {
         viewModelScope.launch {

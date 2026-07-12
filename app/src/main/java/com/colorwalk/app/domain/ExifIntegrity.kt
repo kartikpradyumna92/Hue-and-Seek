@@ -28,8 +28,25 @@ package com.colorwalk.app.domain
  * Every check degrades gracefully: a missing field simply skips its rule (real-world
  * photos legitimately lack fields — screenshots, messaging apps strip EXIF — and
  * those already fail the separate no-date gate).
+ *
+ * SCOPE (L-5): these heuristics are tamper-EVIDENT, not tamper-proof. They exist to
+ * stop casual date editing (the realistic threat for a streak game); an editor that
+ * rewrites DateTimeDigitized and touches the file mtime defeats them by design.
+ * Do not present them to users as cryptographic verification.
  */
 object ExifIntegrity {
+
+    /**
+     * ISO-BMFF brands that identify a HEIF-family IMAGE. A bare 'ftyp' box also
+     * matches MP4/MOV video containers (brands like isom/mp42/qt) — those must NOT
+     * sniff as images (L-5).
+     */
+    private val HEIF_BRANDS = setOf(
+        "heic", "heix", "heim", "heis",   // HEVC-coded stills
+        "hevc", "hevx", "hevm", "hevs",   // HEVC sequences
+        "mif1", "msf1",                   // structural HEIF brands
+        "avif", "avis"                    // AV1 image format
+    )
 
     /** Recognized image containers, by leading magic bytes. */
     enum class Format { JPEG, PNG, WEBP, HEIF }
@@ -70,9 +87,12 @@ object ExifIntegrity {
             b(8) == 'W'.code && b(9) == 'E'.code && b(10) == 'B'.code && b(11) == 'P'.code
         ) return Format.WEBP
 
-        // HEIF/HEIC/AVIF family: ISO-BMFF "ftyp" box at offset 4.
-        if (b(4) == 'f'.code && b(5) == 't'.code && b(6) == 'y'.code && b(7) == 'p'.code)
-            return Format.HEIF
+        // HEIF/HEIC/AVIF family: ISO-BMFF "ftyp" box at offset 4, restricted to
+        // known IMAGE brands — plain 'ftyp' alone would also accept MP4 video (L-5).
+        if (b(4) == 'f'.code && b(5) == 't'.code && b(6) == 'y'.code && b(7) == 'p'.code) {
+            val brand = String(header, 8, 4, Charsets.US_ASCII).lowercase()
+            return if (brand in HEIF_BRANDS) Format.HEIF else null
+        }
 
         return null
     }

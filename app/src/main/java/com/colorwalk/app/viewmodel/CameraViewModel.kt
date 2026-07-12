@@ -1,6 +1,5 @@
 package com.colorwalk.app.viewmodel
 
-import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -61,11 +60,16 @@ class CameraViewModel @Inject constructor(
         _captureState.value = CaptureState.StorageError
     }
 
-    fun onPhotoCaptured(bitmap: Bitmap) {
+    /**
+     * [jpegBytes] is the camera HAL's original JPEG — saved verbatim so EXIF survives
+     * (L-2). [mirror] is true for front-camera captures: the selfie is saved AS
+     * PREVIEWED via an EXIF orientation flip (L-3).
+     */
+    fun onPhotoCaptured(jpegBytes: ByteArray, mirror: Boolean = false) {
         _captureState.value = CaptureState.Processing
         val color = _targetColor.value
         viewModelScope.launch {
-            _captureState.value = when (val result = repo.savePhoto(bitmap, color)) {
+            _captureState.value = when (val result = repo.savePhoto(jpegBytes, color, mirror)) {
                 is SaveResult.Success          -> CaptureState.AwaitingNote(result.validation.dominantHex, result.photoId)
                 is SaveResult.ValidationFailed -> CaptureState.Failed(
                     result.validation.matchPercent, color.name,

@@ -59,6 +59,47 @@ object SwipePhysics {
     }
 
     /**
+     * One clamped, velocity-tracked page drag from touch-down to release (I-2) —
+     * the bookkeeping every hub edge, Home itself, and the onboarding pager used
+     * to duplicate: gesture-start anchoring, the one-page clamp intersected with
+     * the strip's outer bounds, delta accumulation, and the release-velocity
+     * estimate feeding [settleTarget].
+     */
+    class OnePageDragSession {
+        private var start = 0f
+        private var clampMin = 0f
+        private var clampMax = 0f
+        private var total = 0f
+        private val velocity = VelocityEstimator()
+
+        /** Drag value this gesture began at (a settled page position). */
+        val startValue: Float get() = start
+
+        /** Smoothed velocity at (or during) release, px/s. */
+        val releaseVelocity: Float get() = velocity.value
+
+        /** [boundMin]/[boundMax]: the whole strip's absolute outer limits. */
+        fun begin(current: Float, viewportPx: Int, boundMin: Float, boundMax: Float) {
+            start = current
+            clampMin = (current - viewportPx).coerceAtLeast(boundMin)
+            clampMax = (current + viewportPx).coerceAtMost(boundMax)
+            total = 0f
+            velocity.reset()
+        }
+
+        /** Accumulates one drag delta; returns the clamped position to snap to. */
+        fun update(delta: Float, uptimeMillis: Long): Float {
+            total += delta
+            velocity.update(delta, uptimeMillis)
+            return (start + total).coerceIn(clampMin, clampMax)
+        }
+
+        /** Where the drag should settle at release. */
+        fun settleTarget(viewportPx: Int): Float =
+            SwipePhysics.settleTarget(start, clampMin, clampMax, total, velocity.value, viewportPx)
+    }
+
+    /**
      * Exponentially-smoothed release-velocity estimator. Call [update] per drag
      * event; read [value] at release. Smoothing suppresses the single-frame spikes
      * touch samplers produce, so one noisy event can't fabricate a flick.

@@ -171,7 +171,10 @@
       "Bash(./gradlew assembleDebug -q)",
       "Bash(echo \"exit=$?\")",
       "Bash(adb logcat *)",
-      "Bash(echo \"build exit=$?\")"
+      "Bash(echo \"build exit=$?\")",
+      "Bash(./gradlew testDebugUnitTest)",
+      "Bash(awk '{print \"APK:\", $5, \"bytes,\", $6, $7, $8}')",
+      "Bash(awk '{print \"Uncommitted changed files:\", $1}')"
     ],
     "additionalDirectories": [
       "/tmp",

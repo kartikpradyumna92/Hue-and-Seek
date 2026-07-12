@@ -1,5 +1,5 @@
 # Play Console — Data Safety Form: Hue & Seek
-### Verified against codebase on 2026-06-07
+### Verified against codebase on 2026-06-07 · Re-verified 2026-07-12 (v1.27.0+)
 
 Use this as your reference while filling in the form at
 Play Console → App content → Data safety.
@@ -11,12 +11,22 @@ Play Console → App content → Data safety.
 | Claim | Status | Evidence |
 |---|---|---|
 | Zero outbound network calls from app code | ✅ Confirmed | grep for http/URL/Retrofit/OkHttp returned no results |
-| Location read once per capture, stored locally | ✅ Confirmed | `getLastLocation()` called only inside `savePhoto()` / `importPhoto()` |
+| Location: one active GPS fix per capture (5s bound), stored locally | ✅ Confirmed | `LocationResolver.getFreshLocation()` (`getCurrentLocation` + `lastLocation` fallback), called only from the save/import/backfill paths |
 | Geocoder used for reverse-geocoding | ⚠️ Note | `android.location.Geocoder` — OS API, may contact Google servers on-device |
-| Photos saved to private storage + device gallery | ✅ Confirmed | `saveToPrivateStorage()` + `publishToSystemGallery()` |
+| Photos saved to private storage + device gallery | ✅ Confirmed | `PhotoFileStore.saveBytes()` + `MediaStoreGallery.publish()` |
 | Play Review SDK triggers in-app review dialog | ✅ Confirmed | `ReviewManagerFactory.create()` → `launchReviewFlow()` |
 | Android Auto Backup enabled | ✅ Confirmed | `android:allowBackup="true"` in manifest |
 | No analytics, crash reporting, or ad SDKs | ✅ Confirmed | No such dependency in build.gradle.kts |
+
+### Changes since the 2026-06-07 verification (I-4)
+
+| What changed | Data-safety impact |
+|---|---|
+| GPS EXIF is written into the **public** gallery copy (`Pictures/ColorWalk`) at capture | Already covered by the Precise-location explanation below; note that any app the user grants media access can read those tags — this is on-device, so it is still "Shared? → No" under Play's definition (no off-device transfer by us) |
+| User-written **photo notes** are stored in Room AND written into the JPEG EXIF `ImageDescription` of both the private and public copies | NEW data type to declare: **Other user-generated content** (section added below) |
+| A **provenance tag** (walk color name + dominant hex) is written into the public copy's EXIF `UserComment` | No personal data — no declaration needed |
+| Auto Backup content is explicitly scoped by `backup_rules.xml` | Backs up `colorwalk.db` (photo metadata incl. coordinates, location labels, notes) and `app_prefs.xml` (streak/reminder settings, deletion tombstones). **Photo image files are NOT backed up.** Google encrypts backup transport/storage — supports the "encrypted in transit → YES" answer |
+| Reminder notifications got a silent end-of-day nudge | No data impact (all local) |
 
 ---
 
@@ -99,6 +109,25 @@ Fill in **only** the rows below. Leave every other data type unchecked.
 > saved to the app's private storage directory and optionally to the device gallery
 > (`Pictures/ColorWalk`). Photos are never uploaded or transmitted. Photo metadata
 > (file path, color label, timestamp, location) is stored in a local Room database.
+
+---
+
+### 📝 Photos and videos → Other user-generated content *(added 2026-07-12)*
+
+| Field | Answer |
+|---|---|
+| Collected? | **Yes** |
+| Shared? | **No** |
+| Required or optional? | **Optional** — notes are an optional caption feature |
+| Processed ephemerally? | **No** — stored in Room DB and JPEG EXIF |
+| Purpose(s) | **App functionality** |
+
+**Explanation to enter in the form:**
+> Users can attach a free-text note to a photo. The note is stored in the app's
+> on-device Room database and embedded in the JPEG's EXIF ImageDescription tag
+> (in both the private copy and the copy saved to the device gallery) so it
+> survives export and gallery backup. Notes are never transmitted by the app.
+> The database copy is included in Android Auto Backup (encrypted by Google).
 
 ---
 
