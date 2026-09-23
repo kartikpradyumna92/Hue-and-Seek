@@ -1,7 +1,7 @@
 package com.colorwalk.app.viewmodel
 
+import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
-import com.colorwalk.app.data.db.ColorSummary
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.data.repository.PhotoRepository
 import com.colorwalk.app.util.MainDispatcherRule
@@ -30,7 +30,6 @@ class GalleryViewModelTest {
 
     private lateinit var repo: PhotoRepository
     private lateinit var photosFlow: MutableStateFlow<List<PhotoEntity>>
-    private lateinit var colorsFlow: MutableStateFlow<List<ColorSummary>>
 
     private fun makePhoto(
         id: Long,
@@ -44,6 +43,7 @@ class GalleryViewModelTest {
         colorName = colorName,
         colorHex = colorHex,
         dateTaken = dateTaken,
+        dayIndex = com.colorwalk.app.domain.StreakCalculator.epochMillisToDayIndex(dateTaken),
         latitude = null,
         longitude = null,
         locationName = locationName,
@@ -54,14 +54,102 @@ class GalleryViewModelTest {
     fun setUp() {
         repo = mockk(relaxed = true)
         photosFlow = MutableStateFlow(emptyList())
-        colorsFlow = MutableStateFlow(emptyList())
 
         every { repo.getAllPhotos() } returns photosFlow
-        every { repo.getDistinctColors() } returns colorsFlow
         every { repo.getPhotosByColor(any()) } returns flowOf(emptyList())
     }
 
-    private fun buildViewModel() = GalleryViewModel(repo)
+    private fun buildViewModel(saved: SavedStateHandle = SavedStateHandle()) =
+        GalleryViewModel(repo, saved, mainDispatcherRule.testDispatcher)
+
+    // ── open viewer follows live rows (BUG-063) ──────────────────────────────
+
+    @Test
+    fun openViewer_picksUpRowChanges_keepingItsOrder() = runTest {
+        val a = makePhoto(1L); val b = makePhoto(2L)
+        photosFlow.value = listOf(a, b)
+        val vm = buildViewModel()
+        vm.openPhoto(b, listOf(a, b))
+
+        // A geocode lands for photo 2 while the viewer is open.
+        photosFlow.value = listOf(a, b.copy(locationName = "Lisbon"))
+
+        val vs = vm.viewerState.value!!
+        assertEquals(listOf(1L, 2L), vs.photos.map { it.id })
+        assertEquals("Lisbon", vs.photos[1].locationName)
+        assertEquals(1, vs.initialIndex)
+    }
+
+    @Test
+    fun openViewer_rowMissingFromTable_keepsItsSnapshot() = runTest {
+        val vm = buildViewModel()
+        val p = makePhoto(7L)
+        vm.openPhoto(p, listOf(p))   // photosFlow is empty
+        assertEquals(listOf(p), vm.viewerState.value!!.photos)
+    }
+
+    // ── date filters follow the day (BUG-063) ────────────────────────────────
+
+    @Test
+    fun thisWeekFilter_isRelativeToTheDayFedIn_notFrozenAtLastEmission() = runTest {
+        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+        photosFlow.value = listOf(makePhoto(1L, dateTaken = cal.timeInMillis))
+        val vm = buildViewModel()
+        vm.setDateFilter(DateFilter.THIS_WEEK)
+        vm.allPhotos.test {
+            var list = awaitItem()
+            while (list.isEmpty()) list = awaitItem()
+            assertEquals(1, list.size)          // yesterday is (normally) this week…
+            // …but 30 days later it no longer is — without any new DB emission.
+            vm.onDayChanged(System.currentTimeMillis() + 30L * 24 * 60 * 60 * 1000)
+            assertTrue(awaitItem().isEmpty())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // ── process-death restore (BUG-008) ──────────────────────────────────────
+
+    @Test
+    fun openAlbumAndTab_areWrittenToSavedState() = runTest {
+        val saved = SavedStateHandle()
+        val vm = buildViewModel(saved)
+        vm.setViewMode(GalleryViewMode.PLACE)
+        vm.selectPlace("Lisbon")
+        vm.openUntagged()
+
+        // A new ViewModel on the restored handle — what process death recreates.
+        val restored = buildViewModel(saved)
+        assertEquals(GalleryViewMode.PLACE, restored.viewMode.value)
+        assertEquals("Lisbon", restored.selectedPlace.value)
+        assertTrue(restored.showingUntagged.value)
+    }
+
+    @Test
+    fun selectedColor_survivesRecreation() = runTest {
+        val saved = SavedStateHandle()
+        buildViewModel(saved).selectColor("Blue")
+        assertEquals("Blue", buildViewModel(saved).selectedColor.value)
+    }
+
+    // ── month sections off the main thread (BUG-041) ─────────────────────────
+
+    @Test
+    fun photosByMonth_groupsInDisplayOrder() = runTest {
+        val sep = Calendar.getInstance().apply { set(2026, Calendar.SEPTEMBER, 10, 12, 0) }.timeInMillis
+        val aug = Calendar.getInstance().apply { set(2026, Calendar.AUGUST, 3, 12, 0) }.timeInMillis
+        photosFlow.value = listOf(
+            makePhoto(1, dateTaken = aug), makePhoto(2, dateTaken = sep), makePhoto(3, dateTaken = sep + 1000)
+        )
+        val vm = buildViewModel()
+        vm.photosByMonth.test {
+            var sections = awaitItem()
+            while (sections.isEmpty()) sections = awaitItem()
+            val fmt = java.text.SimpleDateFormat("MMMM yyyy", java.util.Locale.getDefault())
+            assertEquals(listOf(fmt.format(java.util.Date(sep)), fmt.format(java.util.Date(aug))), sections.map { it.first })
+            assertEquals(listOf(3L, 2L), sections[0].second.map { it.id })   // newest first
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 
     // ── initial state ────────────────────────────────────────────────────────
 
@@ -247,33 +335,36 @@ class GalleryViewModelTest {
     }
 
     @Test
-    fun setSearchQuery_filtersColorFoldersByName_caseInsensitive() = runTest {
+    fun setSearchQuery_filtersColorFolderCardsByName_caseInsensitive() = runTest {
+        photosFlow.value = listOf(
+            makePhoto(1, colorName = "Blue", colorHex = "#1E88E5"),
+            makePhoto(2, colorName = "Red", colorHex = "#E53935")
+        )
         val vm = buildViewModel()
-        vm.colorFolders.test {
-            awaitItem() // initial [] (colorsFlow is empty; upstream just started)
-            colorsFlow.value = listOf(ColorSummary("Blue", "#1E88E5"), ColorSummary("Red", "#E53935"))
-            awaitItem() // [Blue, Red] — no filter
+        vm.colorFolderCards.test {
+            var cards = awaitItem()
+            while (cards.size != 2) cards = awaitItem()
             vm.setSearchQuery("blue")
             val filtered = awaitItem()
-            assertEquals(1, filtered.size)
-            assertEquals("Blue", filtered[0].colorName)
+            assertEquals(listOf("Blue"), filtered.map { it.colorName })
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun setSearchQuery_emptyQuery_returnsAllFolders() = runTest {
+    fun setSearchQuery_emptyQuery_returnsAllFolderCards() = runTest {
+        photosFlow.value = listOf(
+            makePhoto(1, colorName = "Blue", colorHex = "#1E88E5"),
+            makePhoto(2, colorName = "Red", colorHex = "#E53935")
+        )
         val vm = buildViewModel()
-        vm.colorFolders.test {
-            awaitItem() // initial []
-            colorsFlow.value = listOf(ColorSummary("Blue", "#1E88E5"), ColorSummary("Red", "#E53935"))
-            awaitItem() // [Blue, Red]
+        vm.colorFolderCards.test {
+            var cards = awaitItem()
+            while (cards.size != 2) cards = awaitItem()
             vm.setSearchQuery("xyz")
-            val noMatch = awaitItem()
-            assertEquals(0, noMatch.size)
+            assertEquals(0, awaitItem().size)
             vm.setSearchQuery("")
-            val all = awaitItem()
-            assertEquals(2, all.size)
+            assertEquals(2, awaitItem().size)
             cancelAndIgnoreRemainingEvents()
         }
     }

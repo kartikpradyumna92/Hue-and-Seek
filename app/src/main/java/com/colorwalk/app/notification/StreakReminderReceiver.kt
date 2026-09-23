@@ -18,6 +18,15 @@ class StreakReminderReceiver : BroadcastReceiver() {
     @OptIn(DelicateCoroutinesApi::class)
     override fun onReceive(context: Context, intent: Intent) {
         val slot = intent.getStringExtra(AlarmScheduler.EXTRA_SLOT) ?: AlarmScheduler.SLOT_MORNING
+        val nowMillis = System.currentTimeMillis()
+        // Alarms armed by older versions carry no trigger time; "now" is the best proxy.
+        val triggerAt = intent.getLongExtra(AlarmScheduler.EXTRA_TRIGGER_AT, -1L)
+            .takeIf { it > 0L } ?: nowMillis
+        val slotDay = StreakCalculator.epochMillisToDayIndex(triggerAt)
+        val today = StreakCalculator.epochMillisToDayIndex(nowMillis)
+        // Mark this slot's day as done BEFORE rescheduling, so the reschedule below
+        // (and any scheduleBoth() later today) skips to tomorrow (BUG-004).
+        NotificationPrefs.setLastFiredDay(context, slot, slotDay)
         val pendingResult = goAsync()
         GlobalScope.launch(Dispatchers.IO) {
             // L-7: an uncaught exception here would leak the pending result until the
@@ -28,16 +37,19 @@ class StreakReminderReceiver : BroadcastReceiver() {
                 // silently dropped — skip the DB reads entirely, but still fall
                 // through to the reschedule below so reminders resume the day the
                 // user re-enables notifications.
-                if (NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+                // A slot for a PAST day (inexact/Doze delivery slipped past midnight)
+                // would announce the wrong day's color — drop it, just reschedule.
+                if (slotDay >= today &&
+                    NotificationManagerCompat.from(context).areNotificationsEnabled()
+                ) {
                     val dao = AppDatabase.getInstance(context).photoDao()
 
-                    val midnight = StreakCalculator.todayMidnightMs()
-                    val tomorrowMidnight = midnight + 24L * 60 * 60 * 1000
-                    val capturedToday = dao.getPhotoForDay(midnight, tomorrowMidnight) != null
+                    // BUG-025: same "today" as Home and the streak (frozen dayIndex).
+                    val capturedToday = dao.hasPhotoOnDay(today)
 
                     if (!capturedToday) {
                         val colorName = colorForDay(System.currentTimeMillis()).name
-                        val streak    = StreakCalculator.compute(dao.getAllPhotoDates())
+                        val streak    = StreakCalculator.computeFromDayIndices(dao.getAllPhotoDayIndices())
                         if (slot == AlarmScheduler.SLOT_LAST_CHANCE) {
                             // Silent end-of-day nudge — the user missed the regular
                             // reminder(s) and the walk is still open.

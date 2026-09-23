@@ -61,4 +61,37 @@ class GallerySynchronizerTest {
     fun unrelatedFilename_isRejected() {
         assertNull(sync.parseDateFromFilename("IMG_20260711_183045.jpg"))
     }
+
+    // ── dayIndexFromFilename (BUG-024) ───────────────────────────────────────
+    // Expected values match MIGRATION_3_4's SQL (verified with sqlite3 during the
+    // fix: 2026-09-22 -> 20718, 1970-01-01 -> 0, 2024-02-29 -> 19782).
+
+    @Test
+    fun dayIndex_isTheFilenamesCalendarDate_independentOfDeviceZone() {
+        assertEquals(20718, sync.dayIndexFromFilename("ColorWalk_20260922_222000_123.jpg"))
+        assertEquals(0, sync.dayIndexFromFilename("ColorWalk_19700101_000000_0.jpg"))
+        assertEquals(19782, sync.dayIndexFromFilename("ColorWalk_20240229_120000_0.jpg"))
+    }
+
+    @Test
+    fun dayIndex_acceptsTheBurstCollisionSuffix() {
+        // BUG-019 names same-second imports "..._SSS_2.jpg".
+        assertEquals(20718, sync.dayIndexFromFilename("ColorWalk_20260922_222000_0_2.jpg"))
+    }
+
+    @Test
+    fun dayIndex_rejectsInvalidOrForeignNames() {
+        assertNull(sync.dayIndexFromFilename("ColorWalk_20261340_120000_0.jpg"))
+        assertNull(sync.dayIndexFromFilename("ColorWalk_edited_copy.jpg"))
+        assertNull(sync.dayIndexFromFilename("photo_17.jpg"))
+        assertNull(sync.dayIndexFromFilename("IMG_20260922_222000.jpg"))
+    }
+
+    @Test
+    fun burstSuffix_doesNotChangeTheParsedTimestamp() {
+        assertEquals(
+            sync.parseDateFromFilename("ColorWalk_20260711_183045_0.jpg"),
+            sync.parseDateFromFilename("ColorWalk_20260711_183045_0_2.jpg")
+        )
+    }
 }

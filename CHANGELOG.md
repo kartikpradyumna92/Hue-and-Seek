@@ -5,6 +5,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.29.0] - 2026-09-23
+
+Travel-safe streaks plus the September full-app audit (64 findings, BUG-001…064) resolved end to end. 352 unit tests green, lint 0 errors.
+
+### Fixed — streak & reminders
+- **Streaks survive time-zone changes** — each photo's local calendar day is now frozen at capture (`dayIndex`), so flying east or west no longer shifts a photo onto another day and breaks the streak. Existing photos are backfilled from their filename's local timestamp, not the phone's zone at upgrade time (BUG-024).
+- **Reminders no longer re-fire repeatedly** when the inexact-alarm fallback fires early (the Android 14+ default) (BUG-004).
+- **"Captured today" agrees everywhere** — the reminder and Home both use the frozen day, correct after travel and on DST days (BUG-025).
+- **Midnight rollover** — accent color, stats "today", and a capture spanning midnight all follow the new day (BUG-036, 037, 047).
+
+### Fixed — camera & import
+- Leaving Camera mid-capture or before the first bind no longer leaves the shutter stuck or the camera bound invisibly (BUG-001, 022).
+- Location works on Android 12+ (coarse + fine requested together) (BUG-002).
+- Large imports decode within a real memory bound — no more OutOfMemory crashes (BUG-003).
+- What is validated now matches the preview crop; captures follow device orientation (BUG-014, 015).
+- Camera failures show a clear message and a Try Again button instead of a black preview (BUG-016).
+- Import integrity check accepts genuine OEM/travel photos (15-minute zone offsets, multi-source dates) (BUG-017).
+- Grace-window imports, same-second burst imports, and non-JPEG imports are credited, named and stored correctly (BUG-018, 019, 045).
+- Clear, actionable error cards: photo not taken, storage full, can't open photo (BUG-049). Import/flip disabled while a photo is processing (BUG-044); lens, zoom and note draft survive small swipes (BUG-043, 048).
+
+### Fixed — storage & data integrity
+- Imported photos are now published to the gallery album, so they survive reinstall/restore (BUG-020).
+- Save pipeline hardened: uncaught errors no longer crash or orphan files, partial files are detected, writes are atomic, and concurrent rotate + note edits can't corrupt a photo (BUG-021, 026, 031, 046).
+- Android 14 "Selected photos" access handled safely; tombstone/backfill prefs updated atomically; startup-sync duplicates prevented; rows with missing files no longer count (BUG-027, 050, 052, 053).
+- Location backfill retries and re-geocodes instead of giving up (BUG-051).
+- Rotation is applied to the gallery copy too (BUG-060).
+
+### Fixed — navigation, gallery & UI
+- System back closes the viewer/albums before leaving Gallery; hub position survives rotation, theme change and process death (BUG-007, 008).
+- Interrupted swipes always settle on a page; swipe thresholds are density-independent (BUG-009, 042).
+- Double taps no longer open duplicate screens; denying camera no longer shows the rationale on every launch (BUG-034, 035).
+- Settings scrolls; layouts fit landscape, small screens and large fonts; content clears the navigation bar and keyboard; status-bar icons follow the in-app theme (BUG-011, 012, 013, 032, 033).
+- Gallery keeps its scroll position, shows rotated photos immediately, resets zoom after delete, zooms at full resolution, and no longer crashes on a place named "untagged_card" (BUG-029, 030, 057, 058, 061, 063).
+- Share and rotate report failures; missing images show a placeholder instead of a blank tile (BUG-059).
+- Celebrations no longer replay or appear off-screen (BUG-038).
+
+### Accessibility & localization
+- Shutter, photos, history strip and stats calendar cells are labeled for TalkBack; low-contrast and tiny text raised; "Show more" has a full tap target (BUG-023, 037, 039).
+- All UI text moved to string resources with proper plurals; color names localizable (database keys unchanged); times follow the device's 12/24-hour setting and dates the device locale (BUG-040).
+
+### Privacy
+- New Settings → Privacy toggles: location in gallery copies (on by default, used for reinstall recovery) and location when sharing (off by default — shared photos have GPS stripped) (BUG-054, 062).
+- Release builds strip debug logging.
+
+### Performance
+- Hub no longer recomposes every frame of a swipe; fewer full-table queries; gallery grouping/sorting off the main thread (BUG-010, 041).
+
+### Build & compliance
+- targetSdk/compileSdk 36; CameraX 1.4.2 (16 KB page-aligned native libraries) (BUG-005, 006).
+- Build pinned to JDK 17 (works with Android Studio's bundled JDK 25) (BUG-055, partial — library upgrades deferred).
+- Monochrome launcher icon layer; round icon fixed (BUG-064).
+
+### Schema
+- **DB version 3 → 4** — adds `dayIndex` (frozen local capture day). `4.json` exported; new Room migration tests (BUG-028).
+
+### Tests
+- 352 unit tests (+76), including swipe settling, capture crop math, layout math, file-store I/O, and `hasPhotoOnDay` / migration instrumented tests.
+
+---
+
 ## [1.28.0] - 2026-07-12
 
 Audit close-out release: the July full-code review is now fully resolved — every remaining Medium and Low finding fixed, plus the structural and test-coverage improvements. 276 unit tests green.

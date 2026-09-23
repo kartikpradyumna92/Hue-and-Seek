@@ -19,6 +19,10 @@ import com.colorwalk.app.ui.components.ScreenHeader
 import com.colorwalk.app.ui.theme.Spacing
 import com.colorwalk.app.viewmodel.AlbumSortOrder
 import com.colorwalk.app.viewmodel.GalleryViewModel
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
 
 @Composable
 fun ColorAlbumScreen(
@@ -56,13 +60,13 @@ fun ColorAlbumScreen(
             }
     ) {
         ScreenHeader(
-            title = colorName,
+            title = colorDisplayName(colorName),
             onBack = onBack,
             titleColor = accentColor,
             subtitle = photos.firstOrNull()?.colorHex?.uppercase()
         ) {
             Text(
-                "${photos.size} photo${if (photos.size != 1) "s" else ""}",
+                pluralStringResource(R.plurals.photo_count, photos.size, photos.size),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = Spacing.s)
@@ -80,15 +84,15 @@ fun ColorAlbumScreen(
                 FilterChip(
                     selected = albumSortOrder == order,
                     onClick = { viewModel.setAlbumSortOrder(order) },
-                    label = { Text(order.label, style = MaterialTheme.typography.labelMedium) }
+                    label = { Text(stringResource(order.label), style = MaterialTheme.typography.labelMedium) }
                 )
             }
         }
 
         if (photos.isEmpty()) {
             EmptyState(
-                title = "No $colorName photos",
-                subtitle = "All photos in this album have been deleted."
+                title = stringResource(R.string.album_color_empty_title, colorDisplayName(colorName)),
+                subtitle = stringResource(R.string.album_color_empty_body)
             )
         } else {
             LazyVerticalGrid(

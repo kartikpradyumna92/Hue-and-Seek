@@ -8,16 +8,15 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.colorwalk.app.MainActivity
 import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
 
 object NotificationHelper {
 
     private const val CHANNEL_ID   = "streak_reminder"
-    private const val CHANNEL_NAME = "Daily Streak Reminder"
     // Separate LOW-importance channel for the end-of-day nudge: no sound, no
     // vibration, no heads-up banner — it just waits in the shade. A separate
     // channel also lets the user silence ONLY the nudge in system settings.
     private const val LAST_CHANCE_CHANNEL_ID   = "streak_last_chance"
-    private const val LAST_CHANCE_CHANNEL_NAME = "End-of-Day Gentle Nudge"
     const val NOTIFICATION_ID      = 1001
 
     fun createChannel(context: Context) {
@@ -25,19 +24,19 @@ object NotificationHelper {
         manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                CHANNEL_NAME,
+                context.getString(R.string.notif_channel_reminder_name),
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "Reminds you to complete today's color walk at your chosen morning and evening times"
+                description = context.getString(R.string.notif_channel_reminder_desc)
             }
         )
         manager.createNotificationChannel(
             NotificationChannel(
                 LAST_CHANCE_CHANNEL_ID,
-                LAST_CHANCE_CHANNEL_NAME,
+                context.getString(R.string.notif_channel_last_chance_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "A silent last-call reminder on days both regular reminders were missed"
+                description = context.getString(R.string.notif_channel_last_chance_desc)
             }
         )
     }
@@ -50,20 +49,22 @@ object NotificationHelper {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val color = context.colorDisplayName(colorName)
+        val res = context.resources
 
         val nudge = when {
-            streak >= 7  -> "Don't break your $streak day streak! 🔥"
-            streak >= 3  -> "$streak days strong — keep it going!"
-            streak == 1  -> "You started yesterday — don't stop now!"
-            else         -> "Start your streak today!"
+            streak >= 7  -> res.getQuantityString(R.plurals.notif_nudge_dont_break, streak, streak)
+            streak >= 3  -> res.getQuantityString(R.plurals.notif_nudge_strong, streak, streak)
+            streak == 1  -> context.getString(R.string.notif_nudge_started_yesterday)
+            else         -> context.getString(R.string.notif_nudge_start_today)
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_notification)
-            .setContentTitle("Find $colorName today 🎨")
+            .setContentTitle(context.getString(R.string.notif_reminder_title, color))
             .setContentText(nudge)
             .setStyle(NotificationCompat.BigTextStyle()
-                .bigText("Today's color is $colorName. $nudge Head outside and snap it before the day ends!"))
+                .bigText(context.getString(R.string.notif_reminder_body, color, nudge)))
             .setContentIntent(tapIntent)
             .setAutoCancel(true)
             .build()
@@ -86,16 +87,17 @@ object NotificationHelper {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val color = context.colorDisplayName(colorName)
 
         val body = if (streak > 0) {
-            "A gentle nudge — one $colorName photo before midnight keeps your $streak-day streak going. Still time."
+            context.resources.getQuantityString(R.plurals.notif_last_chance_body_streak, streak, color, streak)
         } else {
-            "A gentle nudge — today's $colorName walk is still open. No pressure, just a little time left."
+            context.getString(R.string.notif_last_chance_body, color)
         }
 
         val notification = NotificationCompat.Builder(context, LAST_CHANCE_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_notification)
-            .setContentTitle("Today's $colorName is still out there")
+            .setContentTitle(context.getString(R.string.notif_last_chance_title, color))
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(tapIntent)

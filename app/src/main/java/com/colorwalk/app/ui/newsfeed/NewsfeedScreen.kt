@@ -61,6 +61,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.ui.res.stringResource
+import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
+import com.colorwalk.app.ui.components.localizedDateFormat
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -147,14 +151,14 @@ fun NewsfeedScreen(
                 TopAppBar(
                     title = {
                         Text(
-                            "Your Walks",
+                            stringResource(R.string.newsfeed_title),
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp
                         )
                     },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -175,6 +179,11 @@ fun NewsfeedScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
+                    // BUG-032: the Scaffold's insets exclude the keyboard; without this
+                    // the card being edited sits behind it. Consuming innerPadding first
+                    // keeps the nav-bar inset from being counted twice.
+                    .consumeWindowInsets(innerPadding)
+                    .imePadding()
                     .then(swipeHomeModifier),
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
@@ -187,6 +196,16 @@ fun NewsfeedScreen(
                         draftText = if (isEditing) draftText else (photo.description ?: ""),
                         onDraftChange = { draftText = it },
                         onStartEdit = {
+                            // Single edit slot: opening another card used to overwrite
+                            // the open draft. Keep a changed one (BUG-048).
+                            val openId = editingId
+                            if (openId != null && openId != photo.id) {
+                                photos.firstOrNull { it.id == openId }?.let { open ->
+                                    if (draftText.trim() != (open.description ?: "").trim()) {
+                                        viewModel.saveDescription(open, draftText)
+                                    }
+                                }
+                            }
                             editingId = photo.id
                             draftText = photo.description ?: ""
                         },
@@ -238,7 +257,7 @@ private fun WalkCard(
     val context = LocalContext.current
     val accentColor = parseAccentHex(photo.dominantColorHex)
     val dateStr = remember(photo.dateTaken) {
-        SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(photo.dateTaken))
+        localizedDateFormat("yMMMd").format(Date(photo.dateTaken))
     }
     val focusRequester = remember { FocusRequester() }
 
@@ -263,7 +282,7 @@ private fun WalkCard(
                         .background(accentColor)
                 )
                 Text(
-                    text = photo.colorName,
+                    text = colorDisplayName(photo.colorName),
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
                     color = MaterialTheme.colorScheme.onBackground
@@ -272,13 +291,13 @@ private fun WalkCard(
                     text = photo.colorHex.uppercase(),
                     fontSize = 12.sp,
                     letterSpacing = 0.5.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                 )
             }
             Text(
                 text = dateStr,
                 fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
             )
         }
 
@@ -314,7 +333,7 @@ private fun WalkCard(
         var photoBounds by remember { mutableStateOf(Rect.Zero) }
         AsyncImage(
             model = photoImageRequest(context, photo.filePath, cacheKey = "feed_${photo.id}"),
-            contentDescription = photo.colorName,
+            contentDescription = stringResource(R.string.photo_desc, colorDisplayName(photo.colorName)),
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .fillMaxWidth()
@@ -360,8 +379,8 @@ private fun WalkCard(
                         ) {
                             if (draftText.isEmpty()) {
                                 Text(
-                                    "Write a note about this moment…",
-                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
+                                    stringResource(R.string.note_hint_write),
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                                     fontSize = 14.sp,
                                     fontStyle = FontStyle.Italic
                                 )
@@ -377,13 +396,13 @@ private fun WalkCard(
                     TextButton(
                         onClick = onCancelEdit,
                         colors = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            contentColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                         )
-                    ) { Text("Cancel", fontSize = 13.sp) }
+                    ) { Text(stringResource(R.string.action_cancel), fontSize = 13.sp) }
                     TextButton(
                         onClick = onCommit,
                         colors = ButtonDefaults.textButtonColors(contentColor = accentColor)
-                    ) { Text("Save", fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+                    ) { Text(stringResource(R.string.action_save), fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
                 }
             }
         } else {
@@ -407,9 +426,9 @@ private fun WalkCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = if (hasNote) photo.description!! else "Add a note…",
+                    text = if (hasNote) photo.description!! else stringResource(R.string.note_add_prompt),
                     color = if (hasNote) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
-                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
+                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     fontSize = 14.sp,
                     fontStyle = if (hasNote) FontStyle.Normal else FontStyle.Italic,
                     lineHeight = 21.sp,
@@ -417,9 +436,9 @@ private fun WalkCard(
                 )
                 Icon(
                     Icons.Default.EditNote,
-                    contentDescription = "Edit note",
+                    contentDescription = stringResource(R.string.note_edit_desc),
                     tint = if (hasNote) accentColor.copy(alpha = 0.7f)
-                           else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                           else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -487,7 +506,7 @@ private fun FullFrameViewer(
             // otherwise drives the swipe-down-to-close gesture below.
             ZoomableAsyncImage(
                 model = photoImageRequest(context, photo.filePath, cacheKey = "full_${photo.id}"),
-                contentDescription = photo.colorName,
+                contentDescription = stringResource(R.string.photo_desc, colorDisplayName(photo.colorName)),
                 state = zoomState,
                 modifier = Modifier.fillMaxSize(),
                 onGestureStart = { swipeYDelta = 0f },
@@ -511,7 +530,7 @@ private fun FullFrameViewer(
             ) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = stringResource(R.string.action_back),
                     tint = Color.White,
                     modifier = Modifier.size(28.dp)
                 )
@@ -519,8 +538,8 @@ private fun FullFrameViewer(
 
             // Swipe hint
             Text(
-                text = "Swipe down to close",
-                color = Color.White.copy(alpha = 0.35f),
+                text = stringResource(R.string.newsfeed_swipe_to_close),
+                color = Color.White.copy(alpha = 0.6f),
                 fontSize = 12.sp,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -562,15 +581,15 @@ private fun EmptyNewsfeed(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                "No walks yet",
+                stringResource(R.string.newsfeed_empty_title),
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 18.sp,
                 color = MaterialTheme.colorScheme.onBackground
             )
             Text(
-                "Go on a color walk to fill your journal",
+                stringResource(R.string.newsfeed_empty_body),
                 fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
             )
         }
     }

@@ -9,6 +9,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
+import com.colorwalk.app.data.PrivacyPrefs
 import com.colorwalk.app.domain.PhotoProvenance
 import java.io.File
 import java.text.SimpleDateFormat
@@ -38,7 +39,48 @@ internal class MediaStoreGallery(private val context: Context) {
         dominantHex: String,
         mirrorHorizontally: Boolean = false
     ) {
-        try {
+        publishFrom({ it.write(jpegBytes) }, filename, now, lat, lon, colorName, dominantHex, mirrorHorizontally)
+    }
+
+    /**
+     * Publishes a photo already in private storage (imports, BUG-020; and the sync's
+     * re-publish of rows whose album copy never landed, BUG-046). Streams the file —
+     * an import can be tens of MB. Its EXIF orientation is already final, so no
+     * mirror flag applies. Returns true when the album copy was written.
+     */
+    fun publishFile(
+        source: File,
+        filename: String,
+        dateTaken: Long,
+        lat: Double?,
+        lon: Double?,
+        colorName: String,
+        dominantHex: String
+    ): Boolean = publishFrom(
+        { out -> source.inputStream().use { it.copyTo(out) } },
+        filename, dateTaken, lat, lon, colorName, dominantHex, mirrorHorizontally = false
+    )
+
+    private fun publishFrom(
+        write: (java.io.OutputStream) -> Unit,
+        filename: String,
+        now: Long,
+        lat: Double?,
+        lon: Double?,
+        colorName: String,
+        dominantHex: String,
+        mirrorHorizontally: Boolean
+    ): Boolean {
+        var pendingUri: android.net.Uri? = null
+        // BUG-054: the user can keep location out of the public copy. Stripping (not
+        // just skipping our write) also covers imports, whose original bytes carry
+        // their own GPS.
+        val includeGps = PrivacyPrefs.saveLocationInGallery(context)
+        fun applyLocation(exif: ExifInterface) {
+            if (!includeGps) ExifLocation.strip(exif)
+            else if (lat != null && lon != null) writeGpsExif(exif, lat, lon)
+        }
+        return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val cv = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, filename)
@@ -48,25 +90,28 @@ internal class MediaStoreGallery(private val context: Context) {
                     put(MediaStore.Images.Media.IS_PENDING, 1)
                 }
                 val resolver = context.contentResolver
-                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return
-                resolver.openOutputStream(uri)?.use { it.write(jpegBytes) }
+                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return false
+                pendingUri = uri
+                resolver.openOutputStream(uri)?.use(write)
                 resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
                     val exif = ExifInterface(pfd.fileDescriptor)
                     exif.setAttribute(
                         ExifInterface.TAG_USER_COMMENT,
                         PhotoProvenance.encode(colorName, dominantHex)
                     )
-                    if (lat != null && lon != null) writeGpsExif(exif, lat, lon)
+                    applyLocation(exif)
                     if (mirrorHorizontally) exif.flipHorizontally()
                     exif.saveAttributes()
                 }
                 cv.clear(); cv.put(MediaStore.Images.Media.IS_PENDING, 0)
                 resolver.update(uri, cv, null, null)
+                pendingUri = null
+                true
             } else {
                 val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "ColorWalk")
                 dir.mkdirs()
                 val file = File(dir, filename)
-                file.writeBytes(jpegBytes)
+                file.outputStream().use(write)
                 val exif = ExifInterface(file.absolutePath)
                 // HAL JPEGs normally carry their own capture time; only backfill it
                 // when absent so the media scanner still indexes a correct DATE_TAKEN.
@@ -79,7 +124,7 @@ internal class MediaStoreGallery(private val context: Context) {
                     ExifInterface.TAG_USER_COMMENT,
                     PhotoProvenance.encode(colorName, dominantHex)
                 )
-                if (lat != null && lon != null) writeGpsExif(exif, lat, lon)
+                applyLocation(exif)
                 if (mirrorHorizontally) exif.flipHorizontally() // L-3: selfie as previewed
                 exif.saveAttributes()
                 // Without an explicit scan the file is invisible to the system gallery
@@ -87,10 +132,17 @@ internal class MediaStoreGallery(private val context: Context) {
                 MediaScannerConnection.scanFile(
                     context, arrayOf(file.absolutePath), arrayOf("image/jpeg"), null
                 )
+                true
             }
         } catch (e: Exception) {
             // Never block the capture flow (M-8: logged, was silent).
             Log.w(TAG, "publish failed for $filename", e)
+            // BUG-046: don't strand a half-written IS_PENDING row — it would block
+            // the sync's re-publish of this name and linger as an invisible entry.
+            pendingUri?.let { uri ->
+                try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) { }
+            }
+            false
         }
     }
 
@@ -98,7 +150,14 @@ internal class MediaStoreGallery(private val context: Context) {
      * Writes [description] into the album copy's EXIF ImageDescription so Google
      * Photos sees note edits. No-op if the entry doesn't exist or isn't writable.
      */
-    fun writeDescription(filename: String, description: String) {
+    fun writeDescription(filename: String, description: String) =
+        editAlbumExif(filename) { it.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description) }
+
+    /** Mirrors a rotation onto the album copy (BUG-060). No-op like [writeDescription]. */
+    fun writeOrientation(filename: String, orientation: Int) =
+        editAlbumExif(filename) { it.setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString()) }
+
+    private fun editAlbumExif(filename: String, edit: (ExifInterface) -> Unit) {
         val resolver = context.contentResolver
         // M-6: DISPLAY_NAME alone is only unique per directory — constrain to the
         // app's own album so a same-named copy elsewhere is never modified.
@@ -127,11 +186,11 @@ internal class MediaStoreGallery(private val context: Context) {
             }
             resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
                 val exif = ExifInterface(pfd.fileDescriptor)
-                exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description)
+                edit(exif)
                 exif.saveAttributes()
             }
         } catch (e: Exception) {
-            Log.w(TAG, "description write failed for $filename", e)
+            Log.w(TAG, "album EXIF write failed for $filename", e)
         } finally {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val notPending = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }

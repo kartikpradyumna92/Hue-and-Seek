@@ -23,11 +23,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.colorwalk.app.R
+import androidx.annotation.StringRes
 
 private data class PermissionItem(
     val icon: ImageVector,
-    val title: String,
-    val reason: String,
+    @StringRes val title: Int,
+    @StringRes val reason: Int,
     val required: Boolean
 )
 
@@ -37,16 +40,16 @@ fun PermissionRationaleScreen(onContinue: () -> Unit) {
         add(
             PermissionItem(
                 icon = Icons.Default.CameraAlt,
-                title = "Camera",
-                reason = "Captures your daily color walk photo and validates it against today's color challenge.",
+                title = R.string.perm_camera_title,
+                reason = R.string.perm_camera_reason,
                 required = true
             )
         )
         add(
             PermissionItem(
                 icon = Icons.Default.LocationOn,
-                title = "Location",
-                reason = "Tags each photo with where you found the color, building a map of your walks. Skipped automatically if you decline.",
+                title = R.string.perm_location_title,
+                reason = R.string.perm_location_reason,
                 required = false
             )
         )
@@ -54,8 +57,8 @@ fun PermissionRationaleScreen(onContinue: () -> Unit) {
             add(
                 PermissionItem(
                     icon = Icons.Default.Notifications,
-                    title = "Notifications",
-                    reason = "Sends a daily reminder to complete your walk before midnight so you never lose your streak.",
+                    title = R.string.perm_notifications_title,
+                    reason = R.string.perm_notifications_reason,
                     required = false
                 )
             )
@@ -63,8 +66,8 @@ fun PermissionRationaleScreen(onContinue: () -> Unit) {
         add(
             PermissionItem(
                 icon = Icons.Default.PhotoLibrary,
-                title = "Photo Library",
-                reason = "Lets you import a photo you already took instead of capturing a new one from the camera.",
+                title = R.string.perm_photos_title,
+                reason = R.string.perm_photos_reason,
                 required = false
             )
         )
@@ -99,7 +102,7 @@ fun PermissionRationaleScreen(onContinue: () -> Unit) {
         Spacer(Modifier.height(20.dp))
 
         Text(
-            "Before we begin",
+            stringResource(R.string.perm_heading),
             fontSize = 26.sp,
             fontWeight = FontWeight.ExtraBold,
             color = MaterialTheme.colorScheme.onBackground
@@ -108,7 +111,7 @@ fun PermissionRationaleScreen(onContinue: () -> Unit) {
         Spacer(Modifier.height(8.dp))
 
         Text(
-            "Hue & Seek needs a few permissions to give you the full experience. Here's exactly what we use each one for.",
+            stringResource(R.string.perm_intro),
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             textAlign = TextAlign.Center,
@@ -130,7 +133,7 @@ fun PermissionRationaleScreen(onContinue: () -> Unit) {
                 .height(56.dp),
             shape = RoundedCornerShape(16.dp)
         ) {
-            Text("Continue", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.perm_continue), fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
 
         Spacer(Modifier.height(32.dp))
@@ -167,7 +170,7 @@ private fun PermissionCard(item: PermissionItem) {
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        item.title,
+                        stringResource(item.title),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -180,14 +183,14 @@ private fun PermissionCard(item: PermissionItem) {
                     val badgeTextColor = if (item.required)
                         MaterialTheme.colorScheme.primary
                     else
-                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
+                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = badgeColor
                     ) {
                         Text(
-                            if (item.required) "Required" else "Optional",
-                            fontSize = 10.sp,
+                            stringResource(if (item.required) R.string.perm_required else R.string.perm_optional),
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = badgeTextColor,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -196,7 +199,7 @@ private fun PermissionCard(item: PermissionItem) {
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    item.reason,
+                    stringResource(item.reason),
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     lineHeight = 19.sp

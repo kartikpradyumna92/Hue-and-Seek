@@ -1,13 +1,21 @@
 package com.colorwalk.app.ui.settings
 
+import android.app.AlarmManager
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,17 +32,25 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.colorwalk.app.data.PrivacyPrefs
 import com.colorwalk.app.domain.WALK_COLORS
 import com.colorwalk.app.notification.AlarmScheduler
 import com.colorwalk.app.notification.NotificationPrefs
 import com.colorwalk.app.ui.theme.ThemeMode
 import java.util.Locale
+import androidx.compose.ui.res.stringResource
+import com.colorwalk.app.R
+import android.content.Context
+import java.util.Calendar
+import com.colorwalk.app.ui.components.formatClockTime
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onThemeChange: (ThemeMode) -> Unit
+    onThemeChange: (ThemeMode) -> Unit,
+    // Supplied by the hub so pulling past the list's end still swipes back to Home.
+    nestedScrollConnection: NestedScrollConnection? = null
 ) {
     val context = LocalContext.current
     val versionName = remember {
@@ -46,10 +62,15 @@ fun SettingsScreen(
 
     // Re-check every time the screen resumes (e.g. after user returns from system settings).
     var notificationsBlocked by remember { mutableStateOf(false) }
+    // API 31+: exact alarms aren't pre-granted on Android 14+, so reminders fall back
+    // to a ~15-minute inexact window unless the user allows precise timing.
+    var exactAlarmsDenied by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             notificationsBlocked = !NotificationManagerCompat.from(context).areNotificationsEnabled()
+            exactAlarmsDenied = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                !context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
         }
     }
     var morningEnabled      by remember { mutableStateOf(NotificationPrefs.isMorningEnabled(context)) }
@@ -67,7 +88,7 @@ fun SettingsScreen(
             onDismissRequest = { showMorningPicker = false },
             properties = DialogProperties(usePlatformDefaultWidth = false),
             modifier = Modifier.widthIn(min = 280.dp),
-            title = { Text("Morning reminder") },
+            title = { Text(stringResource(R.string.settings_morning_reminder)) },
             text = { TimePicker(state = pickerState) },
             confirmButton = {
                 TextButton(onClick = {
@@ -76,10 +97,10 @@ fun SettingsScreen(
                     NotificationPrefs.setMorning(context, pickerState.hour, pickerState.minute)
                     if (notificationsEnabled && morningEnabled) AlarmScheduler.scheduleMorning(context)
                     showMorningPicker = false
-                }) { Text("Set") }
+                }) { Text(stringResource(R.string.settings_set)) }
             },
             dismissButton = {
-                TextButton(onClick = { showMorningPicker = false }) { Text("Cancel") }
+                TextButton(onClick = { showMorningPicker = false }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -90,7 +111,7 @@ fun SettingsScreen(
             onDismissRequest = { showEveningPicker = false },
             properties = DialogProperties(usePlatformDefaultWidth = false),
             modifier = Modifier.widthIn(min = 280.dp),
-            title = { Text("Evening reminder") },
+            title = { Text(stringResource(R.string.settings_evening_reminder)) },
             text = { TimePicker(state = pickerState) },
             confirmButton = {
                 TextButton(onClick = {
@@ -99,10 +120,10 @@ fun SettingsScreen(
                     NotificationPrefs.setEvening(context, pickerState.hour, pickerState.minute)
                     if (notificationsEnabled && eveningEnabled) AlarmScheduler.scheduleEvening(context)
                     showEveningPicker = false
-                }) { Text("Set") }
+                }) { Text(stringResource(R.string.settings_set)) }
             },
             dismissButton = {
-                TextButton(onClick = { showEveningPicker = false }) { Text("Cancel") }
+                TextButton(onClick = { showEveningPicker = false }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -126,21 +147,30 @@ fun SettingsScreen(
                 IconButton(onClick = onBack) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = stringResource(R.string.action_back),
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
                 Text(
-                    "Settings",
+                    stringResource(R.string.settings_title),
                     style = MaterialTheme.typography.headlineMedium,
                     modifier = Modifier.padding(start = 4.dp)
                 )
             }
 
-            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+            // BUG-011: scrollable — the content (~850dp with a banner) overflowed small
+            // phones and large font scales, cutting off the evening reminder controls.
+            Column(
+                modifier = Modifier
+                    .then(nestedScrollConnection?.let { Modifier.nestedScroll(it) } ?: Modifier)
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()   // BUG-033: last row clears the nav bar
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp)
+            ) {
 
                 // ── About ─────────────────────────────────────────────────────
-                SettingsSectionHeader("About")
+                SettingsSectionHeader(stringResource(R.string.settings_section_about))
 
                 Card(
                     shape = MaterialTheme.shapes.large,
@@ -148,7 +178,7 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
-                            "Hue & Seek",
+                            stringResource(R.string.app_name),
                             style = MaterialTheme.typography.headlineSmall.copy(
                                 brush = Brush.horizontalGradient(
                                     WALK_COLORS.map { it.composeColor }
@@ -169,7 +199,7 @@ fun SettingsScreen(
                         }
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            "A daily color walk — find today's color in the world around you.",
+                            stringResource(R.string.settings_about_tagline),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -179,7 +209,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
                             Text(
-                                "v$versionName",
+                                stringResource(R.string.settings_version, versionName),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -191,14 +221,14 @@ fun SettingsScreen(
                 Spacer(Modifier.height(24.dp))
 
                 // ── Display ──────────────────────────────────────────────────
-                SettingsSectionHeader("Display")
+                SettingsSectionHeader(stringResource(R.string.settings_section_display))
 
                 Card(
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Theme", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.settings_theme), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.height(12.dp))
                         ThemeSelector(
                             selected = selectedTheme,
@@ -214,7 +244,7 @@ fun SettingsScreen(
                 Spacer(Modifier.height(24.dp))
 
                 // ── Notifications ─────────────────────────────────────────────
-                SettingsSectionHeader("Notifications")
+                SettingsSectionHeader(stringResource(R.string.settings_section_notifications))
 
                 if (notificationsBlocked) {
                     Card(
@@ -239,13 +269,13 @@ fun SettingsScreen(
                             Spacer(Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "Notifications blocked",
+                                    stringResource(R.string.settings_notifications_blocked),
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onErrorContainer
                                 )
                                 Text(
-                                    "Reminders won't appear. Tap to enable in system settings.",
+                                    stringResource(R.string.settings_notifications_blocked_body),
                                     fontSize = 12.sp,
                                     lineHeight = 16.sp,
                                     color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
@@ -258,7 +288,62 @@ fun SettingsScreen(
                                 }
                                 context.startActivity(intent)
                             }) {
-                                Text("Open", color = MaterialTheme.colorScheme.onErrorContainer)
+                                Text(stringResource(R.string.settings_open), color = MaterialTheme.colorScheme.onErrorContainer)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                } else if (notificationsEnabled && exactAlarmsDenied &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                ) {
+                    // Never shown together with the "blocked" banner — with notifications
+                    // blocked, alarm precision is moot; one actionable problem at a time.
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Schedule,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.settings_exact_alarm_title),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                Text(
+                                    stringResource(R.string.settings_exact_alarm_body),
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = {
+                                // Granting fires SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED;
+                                // BootReceiver re-arms the reminders as exact alarms (L-10).
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                )
+                            }) {
+                                Text(stringResource(R.string.settings_allow), color = MaterialTheme.colorScheme.onSecondaryContainer)
                             }
                         }
                     }
@@ -278,9 +363,9 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Daily reminders", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                                Text(stringResource(R.string.settings_daily_reminders), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    "Notified only if you haven't completed today's walk",
+                                    stringResource(R.string.settings_daily_reminders_body),
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                                     lineHeight = 16.sp
@@ -303,7 +388,7 @@ fun SettingsScreen(
 
                             // Morning row
                             ReminderSlotRow(
-                                label      = "Morning",
+                                label      = stringResource(R.string.settings_morning),
                                 hour       = morningHour,
                                 minute     = morningMinute,
                                 enabled    = morningEnabled,
@@ -320,7 +405,7 @@ fun SettingsScreen(
 
                             // Evening row
                             ReminderSlotRow(
-                                label      = "Evening",
+                                label      = stringResource(R.string.settings_evening),
                                 hour       = eveningHour,
                                 minute     = eveningMinute,
                                 enabled    = eveningEnabled,
@@ -342,15 +427,10 @@ fun SettingsScreen(
                                     eveningEnabled, eveningHour * 60 + eveningMinute
                                 )
                                 val lastChanceText = if (lastChanceMinute != null) {
-                                    val cal = java.util.Calendar.getInstance().apply {
-                                        set(java.util.Calendar.HOUR_OF_DAY, lastChanceMinute / 60)
-                                        set(java.util.Calendar.MINUTE, lastChanceMinute % 60)
-                                    }
-                                    val timeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-                                        .format(cal.time)
-                                    "Miss your reminders? A silent last-call nudge arrives around $timeStr on days your walk isn't done — no sound, no buzz."
+                                    val timeStr = formatTime(context, lastChanceMinute / 60, lastChanceMinute % 60)
+                                    stringResource(R.string.settings_last_chance_on, timeStr)
                                 } else {
-                                    "Your evening reminder is late enough to double as the day's last call — no extra nudge is sent."
+                                    stringResource(R.string.settings_last_chance_off)
                                 }
                                 Text(
                                     lastChanceText,
@@ -363,8 +443,69 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                Spacer(Modifier.height(24.dp))
+
+                // ── Privacy (BUG-054, BUG-062) ───────────────────────────────
+                SettingsSectionHeader(stringResource(R.string.settings_section_privacy))
+
+                var locationInGallery by remember { mutableStateOf(PrivacyPrefs.saveLocationInGallery(context)) }
+                var locationInShares by remember { mutableStateOf(PrivacyPrefs.includeLocationWhenSharing(context)) }
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        PrivacyToggleRow(
+                            title = stringResource(R.string.settings_location_gallery_title),
+                            body = stringResource(R.string.settings_location_gallery_body),
+                            checked = locationInGallery,
+                            onCheckedChange = {
+                                locationInGallery = it
+                                PrivacyPrefs.setSaveLocationInGallery(context, it)
+                            }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        PrivacyToggleRow(
+                            title = stringResource(R.string.settings_location_share_title),
+                            body = stringResource(R.string.settings_location_share_body),
+                            checked = locationInShares,
+                            onCheckedChange = {
+                                locationInShares = it
+                                PrivacyPrefs.setIncludeLocationWhenSharing(context, it)
+                            }
+                        )
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun PrivacyToggleRow(
+    title: String,
+    body: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                body,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                lineHeight = 16.sp
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -386,7 +527,7 @@ private fun ReminderSlotRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Text(
-                formatTime(hour, minute),
+                formatTime(LocalContext.current, hour, minute),
                 fontSize = 13.sp,
                 color = if (enabled) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
@@ -395,7 +536,7 @@ private fun ReminderSlotRow(
         TextButton(
             onClick = onChangeTap,
             enabled = enabled
-        ) { Text("Change") }
+        ) { Text(stringResource(R.string.settings_change)) }
         Switch(checked = enabled, onCheckedChange = onToggle)
     }
 }
@@ -412,7 +553,11 @@ private fun SettingsSectionHeader(title: String) {
 
 @Composable
 private fun ThemeSelector(selected: ThemeMode, onSelect: (ThemeMode) -> Unit) {
-    val options = listOf(ThemeMode.DARK to "Dark", ThemeMode.LIGHT to "Light", ThemeMode.SYSTEM to "System")
+    val options = listOf(
+        ThemeMode.DARK to stringResource(R.string.settings_theme_dark),
+        ThemeMode.LIGHT to stringResource(R.string.settings_theme_light),
+        ThemeMode.SYSTEM to stringResource(R.string.settings_theme_system)
+    )
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { (mode, label) ->
             val isSelected = mode == selected
@@ -435,8 +580,11 @@ private fun ThemeSelector(selected: ThemeMode, onSelect: (ThemeMode) -> Unit) {
     }
 }
 
-private fun formatTime(hour: Int, minute: Int): String {
-    val h = if (hour % 12 == 0) 12 else hour % 12
-    val amPm = if (hour < 12) "AM" else "PM"
-    return String.format(Locale.getDefault(), "%d:%02d %s", h, minute, amPm)
+// Honours the device's 12/24-hour setting (BUG-040).
+private fun formatTime(context: Context, hour: Int, minute: Int): String {
+    val cal = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+    }
+    return formatClockTime(context, cal.time)
 }

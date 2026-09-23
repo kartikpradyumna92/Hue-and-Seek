@@ -7,10 +7,11 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import androidx.room.withTransaction
+import com.colorwalk.app.data.PrivacyPrefs
 import com.colorwalk.app.data.db.AppDatabase
-import com.colorwalk.app.data.db.ColorSummary
 import com.colorwalk.app.data.db.PhotoDao
 import com.colorwalk.app.data.db.PhotoEntity
+import com.colorwalk.app.data.db.PhotoSetSignature
 import com.colorwalk.app.domain.ColorValidator
 import com.colorwalk.app.domain.ExifIntegrity
 import com.colorwalk.app.domain.StreakCalculator
@@ -20,7 +21,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -36,6 +41,12 @@ import javax.inject.Singleton
 // logged). Expected/per-design fallbacks stay quiet or log at DEBUG; anything that
 // loses user-visible work logs at WARN or ERROR.
 private const val TAG = "PhotoRepository"
+
+// Place-name retries per Gallery open for GPS-tagged rows whose geocode failed (BUG-051).
+private const val REGEOCODE_BATCH = 10
+
+// Below this much free space a save is refused up front as "storage full" (BUG-049).
+private const val MIN_FREE_BYTES = 20L * 1024 * 1024
 
 @Singleton
 class PhotoRepository internal constructor(
@@ -64,11 +75,19 @@ class PhotoRepository internal constructor(
     private val files = filesOverride ?: PhotoFileStore(context)
     private val location = locationOverride ?: LocationResolver(context)
     private val mediaGallery = mediaGalleryOverride ?: MediaStoreGallery(context)
-    private val gallerySync = gallerySyncOverride ?: GallerySynchronizer(context, dao, db, files)
+    private val gallerySync = gallerySyncOverride ?: GallerySynchronizer(context, dao, db, files, mediaGallery)
+
+    // Fires after the user captures or imports a photo — never for startup-sync
+    // recovery inserts — so Home can tell a real capture from sync churn (BUG-038).
+    private val _userAddedPhotos = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val userAddedPhotos: SharedFlow<Unit> = _userAddedPhotos.asSharedFlow()
 
     fun getAllPhotos(): Flow<List<PhotoEntity>> = dao.getAllPhotos()
+    fun getRecentPhotos(limit: Int): Flow<List<PhotoEntity>> = dao.getRecentPhotos(limit)
+    fun observePhotoSetSignature(): Flow<PhotoSetSignature> = dao.observePhotoSetSignature()
     fun getPhotosByColor(colorName: String): Flow<List<PhotoEntity>> = dao.getPhotosByColor(colorName)
-    fun getDistinctColors(): Flow<List<ColorSummary>> = dao.getDistinctColors()
 
     /**
      * Persists a user-written description to the DB, to the private JPEG file,
@@ -84,9 +103,7 @@ class PhotoRepository internal constructor(
         // 1. Write to the private file.
         if (photo.filePath.startsWith("/")) {
             try {
-                val exif = ExifInterface(photo.filePath)
-                exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, tag)
-                exif.saveAttributes()
+                files.editExif(photo.filePath) { it.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, tag) }
             } catch (e: Exception) {
                 // Note survives in the DB either way; only the EXIF copy is lost.
                 android.util.Log.w(TAG, "EXIF description write failed for ${photo.filePath}", e)
@@ -118,7 +135,10 @@ class PhotoRepository internal constructor(
      * C4: All DB location updates are batched in a single transaction.
      */
     suspend fun backfillLocationData() = withContext(Dispatchers.IO) {
-        val allMissing = dao.getAllPhotosSnapshot()
+        val snapshot = dao.getAllPhotosSnapshot()
+        renameCoordinateOnlyRows(snapshot)
+
+        val allMissing = snapshot
             .filter { photo ->
                 val lat = photo.latitude
                 val lon = photo.longitude
@@ -130,6 +150,11 @@ class PhotoRepository internal constructor(
         val attemptedIds = getAttemptedBackfillIds()
         val toAttempt = allMissing.filter { it.id !in attemptedIds }
         if (toAttempt.isEmpty()) return@withContext
+        // BUG-051: only open the EXIF of the album copies we actually need — this used
+        // to read every ColorWalk_* file's EXIF whenever any photo was unattempted.
+        val wantedNames = toAttempt.mapNotNullTo(HashSet()) { photo ->
+            java.io.File(photo.filePath).name.takeIf { it.startsWith("ColorWalk_") }
+        }
 
         // Build filename → GPS map from MediaStore EXIF in one pass
         val locationByFilename = mutableMapOf<String, Pair<Double, Double>>()
@@ -141,11 +166,15 @@ class PhotoRepository internal constructor(
                 projection, selection, null, null
             )
         } catch (_: Exception) { null }   // SecurityException if READ_MEDIA_IMAGES denied — skip gracefully
-        backfillCursor?.use { cursor ->
+        // BUG-051: a failed scan attempted nothing — don't mark these photos, or
+        // granting photo access later would never backfill them.
+        if (backfillCursor == null) return@withContext
+        backfillCursor.use { cursor ->
             val idCol   = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             while (cursor.moveToNext()) {
                 val name = cursor.getString(nameCol) ?: continue
+                if (name !in wantedNames) continue
                 val mediaId  = cursor.getLong(idCol)
                 val mediaUri = ContentUris.withAppendedId(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId
@@ -177,6 +206,25 @@ class PhotoRepository internal constructor(
         markBackfillAttempted(toAttempt.map { it.id })
     }
 
+    /**
+     * BUG-051: a photo with a real GPS fix but no place name (geocoding failed —
+     * offline at capture) stayed "Near x°N" forever. Retry a bounded batch per call;
+     * failures just wait for the next Gallery open.
+     */
+    private suspend fun renameCoordinateOnlyRows(snapshot: List<PhotoEntity>) {
+        snapshot.asSequence()
+            .filter { it.locationName == null && hasRealFix(it.latitude, it.longitude) }
+            .take(REGEOCODE_BATCH)
+            .forEach { photo ->
+                val name = location.reverseGeocode(photo.latitude, photo.longitude) ?: return@forEach
+                // Re-read: the user may have named it (or deleted it) meanwhile.
+                val current = dao.getById(photo.id) ?: return@forEach
+                if (current.locationName == null) {
+                    dao.updateLocation(photo.id, current.latitude, current.longitude, name)
+                }
+            }
+    }
+
     suspend fun getPhotoById(id: Long): PhotoEntity? = withContext(Dispatchers.IO) {
         dao.getById(id)
     }
@@ -200,20 +248,18 @@ class PhotoRepository internal constructor(
         lat != null && lon != null && !(Math.abs(lat) < 0.001 && Math.abs(lon) < 0.001)
 
     suspend fun getStreak(): Int = withContext(Dispatchers.IO) {
-        StreakCalculator.compute(dao.getAllPhotoDates())
+        StreakCalculator.computeFromDayIndices(dao.getAllPhotoDayIndices())
     }
 
-    /** Day indices (local-tz) for all photos — used by history strip and review check. */
+    /** Day indices, frozen at capture time (T-1), for all photos — used by history
+     *  strip and review check. */
     suspend fun getCapturedDayIndices(): Set<Int> = withContext(Dispatchers.IO) {
-        dao.getAllPhotoDates()
-            .map { StreakCalculator.epochMillisToDayIndex(it) }
-            .toHashSet()
+        dao.getAllPhotoDayIndices().toHashSet()
     }
 
+    /** Same "today" as Home and the streak: the frozen dayIndex (BUG-025). */
     suspend fun hasCapturedToday(): Boolean = withContext(Dispatchers.IO) {
-        val midnight = StreakCalculator.todayMidnightMs()
-        val tomorrowMidnight = midnight + 24L * 60 * 60 * 1000
-        dao.getPhotoForDay(midnight, tomorrowMidnight) != null
+        dao.hasPhotoOnDay(StreakCalculator.epochMillisToDayIndex(System.currentTimeMillis()))
     }
 
     /**
@@ -233,20 +279,32 @@ class PhotoRepository internal constructor(
     suspend fun savePhoto(
         jpegBytes: ByteArray,
         targetColor: WalkColor,
-        mirrorHorizontally: Boolean = false
+        mirrorHorizontally: Boolean = false,
+        // BUG-047: the SHUTTER time, from which the caller also took [targetColor] — so
+        // a press at 23:59:59 is saved on the day whose color it was validated against.
+        capturedAt: Long = System.currentTimeMillis(),
+        // BUG-014: the part of the frame the preview showed (null = whole frame).
+        validationCrop: NormalizedCrop? = null
     ): SaveResult =
         withContext(Dispatchers.IO) {
+            // BUG-049: say "storage full" instead of a generic failure.
+            if (!hasRoomFor(jpegBytes.size.toLong())) return@withContext SaveResult.StorageFull
+
             // Kick off the GPS request immediately so the fix warms up while color
             // validation runs. On repoScope, NOT this scope: withContext waits for
             // its children, and the whole point of L-8 is that savePhoto returns
             // without waiting for the fix.
             val locationDeferred = repoScope.async { location.getFreshLocation() }
 
-            val bitmap = files.decodeBounded(jpegBytes)
-            if (bitmap == null) {
+            val decoded = files.decodeBounded(jpegBytes)
+            if (decoded == null) {
                 locationDeferred.cancel()
                 return@withContext SaveResult.StorageError
             }
+            // Validate what the user framed: the preview is a center crop of the sensor
+            // image, and judging the full frame counted colors they never saw (BUG-014).
+            // The crop is in the undecoded buffer's orientation — as is the decode.
+            val bitmap = validationCrop?.let { crop -> crop.applyTo(decoded)?.also { decoded.recycle() } } ?: decoded
             val validation = ColorValidator.validate(bitmap, targetColor)
             bitmap.recycle()  // C3: pixel data no longer needed — disk writes use the bytes
             if (!validation.passed) {
@@ -254,7 +312,7 @@ class PhotoRepository internal constructor(
                 return@withContext SaveResult.ValidationFailed(validation)
             }
 
-            val now = System.currentTimeMillis()
+            val now = capturedAt
             // Include millis so two captures in the same second never share a filename.
             val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(now))}_${now % 1000}.jpg"
 
@@ -266,28 +324,34 @@ class PhotoRepository internal constructor(
             }
             if (mirrorHorizontally) {
                 try {
-                    ExifInterface(privateFile.absolutePath).apply {
-                        flipHorizontally()
-                        saveAttributes()
-                    }
+                    files.editExif(privateFile.absolutePath) { it.flipHorizontally() }
                 } catch (e: Exception) {
                     // Un-mirrored selfie is a cosmetic miss, not a lost capture.
                     android.util.Log.w(TAG, "Selfie mirror flip failed for $filename", e)
                 }
             }
 
-            val id = dao.insert(
+            val id = insertOrDiscard(
+                privateFile,
                 PhotoEntity(
                     filePath = privateFile.absolutePath,   // absolute path — passed as File to Coil
                     colorName = targetColor.name,
                     colorHex = targetColor.hex,
                     dateTaken = now,
+                    // Frozen NOW, in the zone the user is physically in at this
+                    // instant — never recomputed later from a possibly-changed
+                    // device zone (T-1).
+                    dayIndex = StreakCalculator.epochMillisToDayIndex(now),
                     latitude = null,       // patched asynchronously below (L-8)
                     longitude = null,
                     locationName = null,   // resolved asynchronously below (B11)
                     dominantColorHex = validation.dominantHex
                 )
-            )
+            ) ?: run {
+                locationDeferred.cancel()
+                return@withContext SaveResult.StorageError
+            }
+            _userAddedPhotos.tryEmit(Unit)
             // (No tombstone clear here — a fresh capture always has a brand-new
             // filename and timestamp, so it can never match an old tombstone; only
             // the import path re-adds previously deleted content (L-6).)
@@ -298,6 +362,9 @@ class PhotoRepository internal constructor(
             // geocode all land afterwards on repoScope, which outlives the caller.
             repoScope.launch {
                 val (lat, lon) = try { locationDeferred.await() } catch (_: Exception) { Pair(null, null) }
+                // BUG-046: the user may have deleted the photo during the GPS wait —
+                // publishing then would plant an orphan copy in their gallery.
+                if (dao.getById(id) == null) return@launch
                 if (lat != null && lon != null) {
                     dao.updateLocation(id, lat, lon, null)
                 }
@@ -309,6 +376,19 @@ class PhotoRepository internal constructor(
             }
             SaveResult.Success(Uri.fromFile(privateFile), validation, id)
         }
+
+    /**
+     * Inserts [entity]; if the DB write fails (e.g. SQLiteFullException) the private
+     * file just written is deleted instead of being orphaned, and null is returned
+     * so the caller reports StorageError rather than crashing (BUG-046).
+     */
+    private suspend fun insertOrDiscard(file: File, entity: PhotoEntity): Long? = try {
+        dao.insert(entity)
+    } catch (e: Exception) {
+        android.util.Log.e(TAG, "DB insert failed for ${file.name}; discarding the file", e)
+        file.delete()
+        null
+    }
 
     /** Imports a photo from device gallery. Only indexes if taken today + color passes. */
     suspend fun importPhoto(uri: Uri, targetColor: WalkColor): ImportResult =
@@ -338,7 +418,9 @@ class PhotoRepository internal constructor(
             }
             if (isDuplicate) return@withContext ImportResult.AlreadyImported
 
-            val bitmap = files.decodeBoundedFromUri(uri) ?: return@withContext ImportResult.StorageError
+            // BUG-049: specific, actionable failures instead of one generic error.
+            if (!hasRoomFor(incomingSize.coerceAtLeast(0L))) return@withContext ImportResult.StorageFull
+            val bitmap = files.decodeBoundedFromUri(uri) ?: return@withContext ImportResult.Unreadable
             val validation = ColorValidator.validate(bitmap, targetColor)
             if (!validation.passed) {
                 bitmap.recycle()  // C3: release before returning
@@ -348,34 +430,74 @@ class PhotoRepository internal constructor(
             // Photo picker URIs are temporary — copy to private storage so display always works.
             // Millis suffix matches savePhoto: two photos taken the same second must not
             // collide on filename and silently overwrite each other (B5).
-            // L-2: copy the ORIGINAL bytes (full EXIF, no re-encode generation); only if
-            // the raw copy fails, fall back to compressing the already-decoded bitmap.
-            val filename = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(dateTaken))}_${dateTaken % 1000}.jpg"
-            val privateFile = files.copyFromUri(filename, uri)
-                ?: files.saveBitmap(bitmap, filename)
+            val filename = uniqueImportFilename(dateTaken)
+            // L-2: copy the ORIGINAL bytes (full EXIF, no re-encode generation) when
+            // they're a JPEG; any other container is transcoded (BUG-045). If both fail,
+            // fall back to compressing the already-decoded (validation-size) bitmap.
+            val privateFile = when (sniffSourceFormat(uri)) {
+                ExifIntegrity.Format.JPEG, null -> files.copyFromUri(filename, uri, reuseExisting = false)
+                else -> files.transcodeToJpeg(uri, filename)
+            } ?: files.saveBitmap(bitmap, filename)
             bitmap.recycle()  // C3: safe before the null check
             if (privateFile == null) return@withContext ImportResult.StorageError
 
             val (lat, lon) = readPhotoLocation(uri)
-            val id = dao.insert(
+            val id = insertOrDiscard(
+                privateFile,
                 PhotoEntity(
                     filePath = privateFile.absolutePath,
                     colorName = targetColor.name,
                     colorHex = targetColor.hex,
                     dateTaken = dateTaken,
+                    // BUG-018: an accepted import counts for TODAY — the day it was
+                    // validated against (today's color). isToday()'s ±4 h grace window
+                    // admits e.g. a 22:30-yesterday travel-day photo as today's walk;
+                    // crediting it to the photo's own date left today "not captured"
+                    // and let a missed yesterday be back-filled. Frozen now (T-1).
+                    dayIndex = StreakCalculator.epochMillisToDayIndex(System.currentTimeMillis()),
                     latitude = lat,
                     longitude = lon,
                     locationName = null,   // resolved asynchronously below (B11)
                     dominantColorHex = validation.dominantHex,
                     originalSizeBytes = incomingSize.takeIf { it > 0L }   // M-4 dedup identity
                 )
-            )
+            ) ?: return@withContext ImportResult.StorageError
+            _userAddedPhotos.tryEmit(Unit)
             // Re-importing a previously deleted photo is a deliberate re-add — drop
             // any matching tombstone so future syncs can recover it again.
             DeletionTombstones.clear(context, filename, dateTaken)
+            // BUG-020: imports get an album copy too, or a reinstall / cloud restore
+            // (DB-only backup, B10) leaves them with no source to recover from.
+            repoScope.launch {
+                if (dao.getById(id) == null) return@launch   // deleted meanwhile
+                mediaGallery.publishFile(
+                    privateFile, filename, dateTaken, lat, lon,
+                    targetColor.name, validation.dominantHex
+                )
+            }
             resolveLocationNameAsync(id, lat, lon)
             ImportResult.Success(Uri.fromFile(privateFile), validation, id)
         }
+
+    /**
+     * "ColorWalk_yyyyMMdd_HHmmss_SSS.jpg", plus "_2", "_3"… when that name is taken.
+     * EXIF dates are second-precision (SSS = 0), so same-second burst shots — which
+     * M-4 dedup deliberately accepts — would otherwise share one file (BUG-019).
+     * The extra part is ignored by GallerySynchronizer.parseDateFromFilename.
+     */
+    private fun uniqueImportFilename(dateTaken: Long): String {
+        val base = "ColorWalk_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(dateTaken))}_${dateTaken % 1000}"
+        var name = "$base.jpg"
+        var n = 2
+        while (files.exists(name)) name = "${base}_${n++}.jpg"
+        return name
+    }
+
+    private fun sniffSourceFormat(uri: Uri): ExifIntegrity.Format? = try {
+        val header = ByteArray(16)
+        val read = context.contentResolver.openInputStream(uri)?.use { it.read(header) } ?: -1
+        if (read >= 12) ExifIntegrity.sniffFormat(header) else null
+    } catch (_: Exception) { null }
 
     /** Startup MediaStore↔DB reconciliation — see [GallerySynchronizer]. */
     suspend fun syncGalleryWithDatabase() = gallerySync.sync()
@@ -385,23 +507,39 @@ class PhotoRepository internal constructor(
      * no pixel re-encoding, no generation loss, no OOM risk (C2). Coil 2.x respects
      * the EXIF orientation tag when loading from file paths.
      */
-    suspend fun rotatePhoto(photo: PhotoEntity) = withContext(Dispatchers.IO) {
-        if (!photo.filePath.startsWith("/")) return@withContext
+    /**
+     * Rotates 90° clockwise. Returns false when nothing was rotated (legacy content://
+     * row, unwritable file) so the UI can say so instead of pretending (BUG-059).
+     */
+    suspend fun rotatePhoto(photo: PhotoEntity): Boolean = withContext(Dispatchers.IO) {
+        // A legacy content:// row: resolve (and migrate) to a private file first — the
+        // viewer's snapshot may predate resolveShareFile's migration (BUG-063).
+        val path = if (photo.filePath.startsWith("/")) photo.filePath
+            else resolveShareFile(photo)?.absolutePath ?: return@withContext false
+        var orientation = ExifInterface.ORIENTATION_NORMAL
         try {
-            val exif = ExifInterface(photo.filePath)
-            val current = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-            val next = when (current) {
-                ExifInterface.ORIENTATION_NORMAL     -> ExifInterface.ORIENTATION_ROTATE_90
-                ExifInterface.ORIENTATION_ROTATE_90  -> ExifInterface.ORIENTATION_ROTATE_180
-                ExifInterface.ORIENTATION_ROTATE_180 -> ExifInterface.ORIENTATION_ROTATE_270
-                ExifInterface.ORIENTATION_ROTATE_270 -> ExifInterface.ORIENTATION_NORMAL
-                else                                 -> ExifInterface.ORIENTATION_ROTATE_90
+            // Read-modify-write inside the serialized edit, so a concurrent note save
+            // can't interleave with (and truncate) the rewrite (BUG-031).
+            files.editExif(path) { exif ->
+                val current = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                orientation = when (current) {
+                    ExifInterface.ORIENTATION_NORMAL     -> ExifInterface.ORIENTATION_ROTATE_90
+                    ExifInterface.ORIENTATION_ROTATE_90  -> ExifInterface.ORIENTATION_ROTATE_180
+                    ExifInterface.ORIENTATION_ROTATE_180 -> ExifInterface.ORIENTATION_ROTATE_270
+                    ExifInterface.ORIENTATION_ROTATE_270 -> ExifInterface.ORIENTATION_NORMAL
+                    else                                 -> ExifInterface.ORIENTATION_ROTATE_90
+                }
+                exif.setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString())
             }
-            exif.setAttribute(ExifInterface.TAG_ORIENTATION, next.toString())
-            exif.saveAttributes()
         } catch (e: Exception) {
-            android.util.Log.w(TAG, "rotatePhoto failed for ${photo.filePath}", e)
+            android.util.Log.w(TAG, "rotatePhoto failed for $path", e)
+            return@withContext false
         }
+        // BUG-060: mirror to the Pictures/ColorWalk copy, as note edits already are —
+        // otherwise Google Photos keeps the old orientation and a reinstall recovers it.
+        val filename = File(path).name
+        if (filename.startsWith("ColorWalk_")) mediaGallery.writeOrientation(filename, orientation)
+        true
     }
 
     /** Deletes a photo from the app DB, private storage, and MediaStore. */
@@ -457,6 +595,17 @@ class PhotoRepository internal constructor(
         file
     }
 
+    /**
+     * The file to hand the share sheet: the private file (see [resolveShareFile]),
+     * with its location removed unless the user opted to share it (BUG-062 —
+     * imports keep their original EXIF, GPS included). Null means don't share.
+     */
+    suspend fun prepareShareFile(photo: PhotoEntity): File? = withContext(Dispatchers.IO) {
+        val file = resolveShareFile(photo) ?: return@withContext null
+        if (PrivacyPrefs.includeLocationWhenSharing(context)) file
+        else files.locationFreeShareCopy(file)
+    }
+
     /** Best-effort display filename for any of the three filePath shapes we store. */
     private fun resolveFilename(path: String): String? = try {
         when {
@@ -485,25 +634,38 @@ class PhotoRepository internal constructor(
             ?.mapNotNull { it.toLongOrNull() }?.toHashSet() ?: emptySet()
     }
 
+    // BUG-050: read-modify-write of the same StringSet from concurrent IO coroutines
+    // (a delete during a backfill) could drop an update; serialize them. apply()
+    // updates the in-memory map immediately, so the lock covers the whole RMW.
+    private val backfillPrefsLock = Any()
+
     private fun markBackfillAttempted(ids: Collection<Long>) {
         if (ids.isEmpty()) return
-        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        val existing = HashSet(prefs.getStringSet("backfill_attempted_ids", emptySet()) ?: emptySet())
-        existing.addAll(ids.map { it.toString() })
-        prefs.edit().putStringSet("backfill_attempted_ids", existing).apply()
+        synchronized(backfillPrefsLock) {
+            val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            val existing = HashSet(prefs.getStringSet("backfill_attempted_ids", emptySet()) ?: emptySet())
+            existing.addAll(ids.map { it.toString() })
+            prefs.edit().putStringSet("backfill_attempted_ids", existing).apply()
+        }
     }
 
     private fun clearBackfillAttempted(id: Long) {
         val key = id.toString()
-        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        val existing = prefs.getStringSet("backfill_attempted_ids", null) ?: return
-        if (key !in existing) return
-        prefs.edit()
-            .putStringSet("backfill_attempted_ids", HashSet(existing).apply { remove(key) })
-            .apply()
+        synchronized(backfillPrefsLock) {
+            val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            val existing = prefs.getStringSet("backfill_attempted_ids", null) ?: return
+            if (key !in existing) return
+            prefs.edit()
+                .putStringSet("backfill_attempted_ids", HashSet(existing).apply { remove(key) })
+                .apply()
+        }
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
+
+    /** Enough free space for [bytes] plus headroom for the DB and the album copy. */
+    private fun hasRoomFor(bytes: Long): Boolean =
+        try { context.filesDir.usableSpace >= bytes * 2 + MIN_FREE_BYTES } catch (_: Exception) { true }
 
     /** Byte size of the content behind [uri], or -1 when it can't be determined. */
     private fun queryContentSize(uri: Uri): Long = try {
@@ -511,13 +673,19 @@ class PhotoRepository internal constructor(
     } catch (_: Exception) { -1L }
 
     private fun readPhotoDate(uri: Uri): Long? {
-        context.contentResolver.query(
-            uri, arrayOf(MediaStore.Images.Media.DATE_TAKEN), null, null, null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val col = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-                if (col >= 0) { val ms = cursor.getLong(col); if (ms > 0) return ms }
+        // BUG-021: some DocumentsProviders reject the DATE_TAKEN projection outright
+        // (IllegalArgumentException) — that must fall through to EXIF, not crash.
+        try {
+            context.contentResolver.query(
+                uri, arrayOf(MediaStore.Images.Media.DATE_TAKEN), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val col = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+                    if (col >= 0) { val ms = cursor.getLong(col); if (ms > 0) return ms }
+                }
             }
+        } catch (e: Exception) {
+            android.util.Log.d(TAG, "DATE_TAKEN unavailable for $uri: $e")
         }
         return try {
             context.contentResolver.openInputStream(uri)?.use { stream ->
@@ -568,14 +736,20 @@ class PhotoRepository internal constructor(
             }
         } catch (_: Exception) { /* unreadable header → let the decoder decide later */ }
 
-        // 2. DateTimeDigitized for the internal-consistency check.
+        // 2. DateTimeOriginal and DateTimeDigitized, parsed the SAME way, so the
+        //    consistency check compares like with like (BUG-017: comparing EXIF against
+        //    an OEM-shifted MediaStore DATE_TAKEN falsely flagged genuine photos).
+        var exifOriginal: Long? = null
         val digitized = try {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 val exif = ExifInterface(stream)
+                val originalOffset = exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)
+                exifOriginal = parseExifTimestamp(
+                    exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL), originalOffset
+                )
                 parseExifTimestamp(
                     exif.getAttribute(ExifInterface.TAG_DATETIME_DIGITIZED),
-                    exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED)
-                        ?: exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)
+                    exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED) ?: originalOffset
                 )
             }
         } catch (_: Exception) { null }
@@ -596,7 +770,9 @@ class PhotoRepository internal constructor(
             }
         } catch (_: Exception) { }
 
-        return ExifIntegrity.evaluate(captureMillis, digitized, fileModifiedMillis, System.currentTimeMillis())
+        return ExifIntegrity.evaluate(
+            captureMillis, digitized, fileModifiedMillis, System.currentTimeMillis(), exifOriginal
+        )
     }
 
     private fun readPhotoLocation(uri: Uri): Pair<Double?, Double?> {
@@ -662,6 +838,26 @@ sealed class SaveResult {
     data class Success(val uri: Uri, val validation: ColorValidator.ValidationResult, val photoId: Long) : SaveResult()
     data class ValidationFailed(val validation: ColorValidator.ValidationResult) : SaveResult()
     object StorageError : SaveResult()
+    /** Not enough free space to save the photo (BUG-049). */
+    object StorageFull : SaveResult()
+}
+
+/**
+ * A sub-rectangle as fractions (0..1) of an image's width/height, in the image's
+ * stored (not EXIF-rotated) orientation — the preview's visible crop (BUG-014).
+ */
+data class NormalizedCrop(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+    /** The matching region of [bitmap], or null when the crop is degenerate. */
+    fun applyTo(bitmap: android.graphics.Bitmap): android.graphics.Bitmap? {
+        val x = (left.coerceIn(0f, 1f) * bitmap.width).toInt()
+        val y = (top.coerceIn(0f, 1f) * bitmap.height).toInt()
+        val w = ((right.coerceIn(0f, 1f) - left.coerceIn(0f, 1f)) * bitmap.width).toInt()
+        val h = ((bottom.coerceIn(0f, 1f) - top.coerceIn(0f, 1f)) * bitmap.height).toInt()
+        if (w < 8 || h < 8) return null
+        return android.graphics.Bitmap.createBitmap(
+            bitmap, x, y, w.coerceAtMost(bitmap.width - x), h.coerceAtMost(bitmap.height - y)
+        )
+    }
 }
 
 sealed class ImportResult {
@@ -671,6 +867,10 @@ sealed class ImportResult {
     data class NotTakenToday(val dateTaken: Long) : ImportResult()
     object AlreadyImported : ImportResult()
     object StorageError : ImportResult()
+    /** Not enough free space to import the photo (BUG-049). */
+    object StorageFull : ImportResult()
+    /** The picked file couldn't be decoded as an image on this device (BUG-049). */
+    object Unreadable : ImportResult()
     /** The file's metadata failed forgery checks ([ExifIntegrity]) — date can't be trusted. */
     object MetadataTampered : ImportResult()
 }

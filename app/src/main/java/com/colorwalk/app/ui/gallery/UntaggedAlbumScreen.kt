@@ -36,6 +36,11 @@ import com.colorwalk.app.ui.theme.Spacing
 import com.colorwalk.app.viewmodel.GalleryViewModel
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
+import com.colorwalk.app.ui.components.localizedDateFormat
 
 @Composable
 fun UntaggedAlbumScreen(
@@ -59,9 +64,9 @@ fun UntaggedAlbumScreen(
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
-        ScreenHeader(title = "Tag Older Photos", onBack = onBack) {
+        ScreenHeader(title = stringResource(R.string.untagged_title), onBack = onBack) {
             Text(
-                "${photos.size} left",
+                pluralStringResource(R.plurals.untagged_left, photos.size, photos.size),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = Spacing.s)
@@ -69,7 +74,7 @@ fun UntaggedAlbumScreen(
         }
 
         Text(
-            "Tap a photo to set its location",
+            stringResource(R.string.untagged_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
@@ -78,7 +83,7 @@ fun UntaggedAlbumScreen(
         )
 
         if (photos.isEmpty()) {
-            EmptyState(title = "All photos tagged!")
+            EmptyState(title = stringResource(R.string.untagged_done))
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
@@ -118,12 +123,12 @@ private fun TagLocationDialog(
     var text by remember { mutableStateOf("") }
     val context = LocalContext.current
     val dateStr = remember(photo.dateTaken) {
-        SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(photo.dateTaken))
+        localizedDateFormat("yMMMd").format(Date(photo.dateTaken))
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Set Location") },
+        title = { Text(stringResource(R.string.untagged_set_location)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(
@@ -140,7 +145,7 @@ private fun TagLocationDialog(
                     )
                     Column {
                         Text(
-                            photo.colorName,
+                            colorDisplayName(photo.colorName),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = parseAccentHex(photo.colorHex)
@@ -156,8 +161,8 @@ private fun TagLocationDialog(
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text("Location", fontSize = 13.sp) },
-                    placeholder = { Text("e.g. San Francisco, California", fontSize = 13.sp) },
+                    label = { Text(stringResource(R.string.untagged_location_label), fontSize = 13.sp) },
+                    placeholder = { Text(stringResource(R.string.untagged_location_placeholder), fontSize = 13.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
@@ -165,7 +170,7 @@ private fun TagLocationDialog(
 
                 if (existingPlaces.isNotEmpty()) {
                     Text(
-                        "Quick pick:",
+                        stringResource(R.string.untagged_quick_pick),
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
@@ -195,11 +200,11 @@ private fun TagLocationDialog(
                 onClick = { onConfirm(text) },
                 enabled = text.isNotBlank()
             ) {
-                Text("Save")
+                Text(stringResource(R.string.action_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         }
     )
 }

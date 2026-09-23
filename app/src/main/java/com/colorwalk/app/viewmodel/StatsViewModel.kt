@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.data.repository.PhotoRepository
-import com.colorwalk.app.domain.StreakCalculator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,19 +34,20 @@ class StatsViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             repo.getAllPhotos().collectLatest { allPhotos ->
-                val timestamps = allPhotos.map { it.dateTaken }
+                // dayIndex is frozen at capture/import time (T-1) — never re-derived
+                // from dateTaken here, or a timezone change after capture (travel)
+                // could reclassify an already-captured photo onto a different day.
+                val dayIndices = allPhotos.map { it.dayIndex }
                 val currentStreak = repo.getStreak()
-                val bestStreak = computeBestStreak(timestamps)
-                val totalActiveDays = timestamps
-                    .map { StreakCalculator.epochMillisToDayIndex(it) }
-                    .distinct().size
+                val bestStreak = computeBestStreak(dayIndices)
+                val totalActiveDays = dayIndices.distinct().size
                 val favEntry = allPhotos
                     .groupBy { it.colorName }
                     .maxByOrNull { it.value.size }
                 // Sort descending so first() per day is the most recent photo
                 val photosByDayIndex = allPhotos
                     .sortedByDescending { it.dateTaken }
-                    .groupBy { StreakCalculator.epochMillisToDayIndex(it.dateTaken) }
+                    .groupBy { it.dayIndex }
 
                 _state.value = StatsUiState(
                     currentStreak = currentStreak,
@@ -66,11 +66,14 @@ class StatsViewModel @Inject constructor(
         _state.value = _state.value.copy(selectedDayPhotos = photos)
     }
 
-    private fun computeBestStreak(timestamps: List<Long>): Int {
-        if (timestamps.isEmpty()) return 0
-        val days = timestamps
-            .map { StreakCalculator.epochMillisToDayIndex(it) }
-            .toSortedSet().toList()
+    /** Share-sheet file for [photo], location-stripped per the privacy setting (BUG-062). */
+    fun prepareShare(photo: PhotoEntity, onReady: (java.io.File?) -> Unit) {
+        viewModelScope.launch { onReady(repo.prepareShareFile(photo)) }
+    }
+
+    private fun computeBestStreak(dayIndices: List<Int>): Int {
+        if (dayIndices.isEmpty()) return 0
+        val days = dayIndices.toSortedSet().toList()
         var best = 1; var current = 1
         for (i in 1 until days.size) {
             current = if (days[i] - days[i - 1] == 1) current + 1 else 1

@@ -36,10 +36,15 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import com.colorwalk.app.ui.components.FitToHeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -67,26 +72,33 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
+import android.content.Context
+import com.colorwalk.app.ui.components.localizedDateFormat
+import com.colorwalk.app.ui.components.formatClockTime
 
-private fun streakMessage(capturedToday: Boolean, streak: Int, colorName: String): String {
+private fun streakMessage(context: Context, capturedToday: Boolean, streak: Int, colorName: String): String {
     return if (capturedToday) {
         when {
-            streak >= 30 -> "30+ days! You have an extraordinary eye for color."
-            streak >= 21 -> "${streak} days — the 30-day mark is close. $colorName was a great find."
-            streak >= 14 -> "Two weeks strong! $colorName was a great find today."
-            streak >= 7  -> "One full week! Your eye is getting sharper every day."
-            streak >= 3  -> "Great work! $colorName captured. Keep the momentum!"
-            streak == 1  -> "First walk complete! Come back tomorrow to build your streak."
-            else         -> "Today's walk complete! See you tomorrow."
+            streak >= 30 -> context.getString(R.string.home_msg_30_plus)
+            streak >= 21 -> context.resources.getQuantityString(R.plurals.home_msg_21_plus, streak, streak, colorName)
+            streak >= 14 -> context.getString(R.string.home_msg_14_plus, colorName)
+            streak >= 7  -> context.getString(R.string.home_msg_7_plus)
+            streak >= 3  -> context.getString(R.string.home_msg_3_plus, colorName)
+            streak == 1  -> context.getString(R.string.home_msg_first)
+            else         -> context.getString(R.string.home_msg_done)
         }
     } else {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         when {
-            hour < 10   -> "Morning light is perfect for finding $colorName. Go for a walk!"
-            hour < 13   -> "Great time for a color walk! $colorName is all around you."
-            hour < 17   -> "Afternoon light is golden — $colorName awaits outside."
-            hour < 20   -> "Evening colors pop beautifully. Don't miss today's $colorName!"
-            else        -> "Still time before midnight! Go find some $colorName."
+            hour < 10   -> context.getString(R.string.home_msg_morning, colorName)
+            hour < 13   -> context.getString(R.string.home_msg_midday, colorName)
+            hour < 17   -> context.getString(R.string.home_msg_afternoon, colorName)
+            hour < 20   -> context.getString(R.string.home_msg_evening, colorName)
+            else        -> context.getString(R.string.home_msg_night, colorName)
         }
     }
 }
@@ -122,10 +134,14 @@ fun HomeScreen(
     // fresh timestamp on every resume.)
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // In-app review — fires once after first 7-day streak
+    // In-app review — fires once after first 7-day streak. BUG-038: only once Home is
+    // the settled pane and any celebration has finished — Home stays composed while
+    // the user is on Camera, so the 7th capture used to pop the Play sheet over the
+    // result card. Leaving mid-flow cancels it (not marked shown; retried later).
     val reviewManager = remember { ReviewManagerFactory.create(context) }
-    LaunchedEffect(state.shouldShowReview) {
-        if (state.shouldShowReview) {
+    val reviewReady = state.shouldShowReview && celebrationVisible && state.celebrationState == null
+    LaunchedEffect(reviewReady) {
+        if (reviewReady) {
             try {
                 val reviewInfo = reviewManager.requestReviewFlow().await()
                 (context as? Activity)?.let { reviewManager.launchReviewFlow(it, reviewInfo).await() }
@@ -162,8 +178,9 @@ fun HomeScreen(
     LaunchedEffect(todayIndex) { viewModel.load() }
 
     val dayName = remember(now) { SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(now)) }
-    val dateStr = remember(now) { SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).format(Date(now)) }
-    val timeStr = remember(now) { SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(now)) }
+    val dateStr = remember(now) { localizedDateFormat("yMMMMd").format(Date(now)) }
+    // BUG-040: honour the device's 12/24-hour setting.
+    val timeStr = remember(now) { formatClockTime(context, Date(now)) }
 
     val animatedColor by animateColorAsState(
         targetValue = color?.composeColor ?: Color.Gray,
@@ -189,162 +206,189 @@ fun HomeScreen(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── App title ─────────────────────────────────────────────
-            Text(
-                "Hue & Seek",
-                fontSize = 28.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-0.5).sp,
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    brush = Brush.horizontalGradient(
-                        listOf(animatedColor, animatedColor.copy(alpha = 0.6f))
-                    )
-                )
-            )
-
-            Spacer(Modifier.height(20.dp))
-
-            // Date / time header
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    dayName,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                    letterSpacing = 2.sp
-                )
-                Text(
-                    dateStr,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
-                )
-                Text(
-                    timeStr,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
-                )
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            Text(
-                "TODAY'S COLOR",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            // Color hero: the daily circle wrapped in a completion ring that closes
-            // fully when today's photo is captured — a daily win, never a half-empty bar.
-            ColorHeroWithRing(
-                color = animatedColor,
-                streak = state.streak,
-                capturedToday = state.capturedToday
-            )
-
-            Spacer(Modifier.height(14.dp))
-
-            Text(
-                color?.name ?: "Loading…",
-                style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            Text(
-                color?.hex ?: "",
-                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 2.sp),
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
-            )
-
-            Spacer(Modifier.height(20.dp))
-
-            // Streak card — tappable to open Streaks & Stats
-            Card(
-                onClick = onOpenStats,
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (state.capturedToday)
-                        animatedColor.copy(alpha = 0.15f)
-                    else
-                        MaterialTheme.colorScheme.surface
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.LocalFireDepartment,
-                            contentDescription = null,
-                            tint = Color(0xFFFF6D00),
-                            modifier = Modifier.size(32.dp)
+            // BUG-013: everything above the action buttons shrinks to fit when it's
+            // taller than the space left (small phone, landscape, large font) instead of
+            // pushing the buttons off-screen. Home can't scroll: every vertical drag here
+            // belongs to the hub (Settings above, Newsfeed below).
+            FitToHeight(Modifier.weight(1f).fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // ── App title ─────────────────────────────────────────────
+                    Text(
+                        stringResource(R.string.app_name),
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = (-0.5).sp,
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            brush = Brush.horizontalGradient(
+                                listOf(animatedColor, animatedColor.copy(alpha = 0.6f))
+                            )
                         )
-                        Spacer(Modifier.width(12.dp))
+                    )
+
+                    Spacer(Modifier.height(20.dp))
+
+                    // Date / time header
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            if (state.streak == 1) "1 day streak"
-                            else "${state.streak} day streak",
-                            fontSize = 20.sp,
+                            dayName,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            letterSpacing = 2.sp
+                        )
+                        Text(
+                            dateStr,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+                        )
+                        Text(
+                            timeStr,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
+
+                    Spacer(Modifier.height(20.dp))
+
                     Text(
-                        streakMessage(state.capturedToday, state.streak, color?.name ?: ""),
-                        fontSize = 13.sp,
-                        color = if (state.capturedToday)
-                            animatedColor.copy(alpha = 0.9f)
-                        else
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-                        lineHeight = 18.sp
+                        stringResource(R.string.home_todays_color),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // Color hero: the daily circle wrapped in a completion ring that closes
+                    // fully when today's photo is captured — a daily win, never a half-empty bar.
+                    ColorHeroWithRing(
+                        color = animatedColor,
+                        streak = state.streak,
+                        capturedToday = state.capturedToday
+                    )
+
+                    Spacer(Modifier.height(14.dp))
+
+                    Text(
+                        color?.let { colorDisplayName(it.name) } ?: stringResource(R.string.home_loading),
+                        style = MaterialTheme.typography.displayMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+
+                    Spacer(Modifier.height(4.dp))
+
+                    Text(
+                        color?.hex ?: "",
+                        style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 2.sp),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                    )
+
+                    Spacer(Modifier.height(20.dp))
+
+                    // Streak card — tappable to open Streaks & Stats
+                    Card(
+                        onClick = onOpenStats,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (state.capturedToday)
+                                animatedColor.copy(alpha = 0.15f)
+                            else
+                                MaterialTheme.colorScheme.surface
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.LocalFireDepartment,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF6D00),
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    pluralStringResource(R.plurals.home_day_streak, state.streak, state.streak),
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                streakMessage(
+                                    LocalContext.current, state.capturedToday, state.streak,
+                                    color?.let { colorDisplayName(it.name) } ?: ""
+                                ),
+                                fontSize = 13.sp,
+                                color = if (state.capturedToday)
+                                    animatedColor.copy(alpha = 0.9f)
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // Past 14-day color history strip — tappable, opens Streaks & Stats
+                    ColorHistoryStrip(
+                        capturedDayIndices = state.capturedDayIndices,
+                        now = now,
+                        onClick = onOpenStats
                     )
                 }
             }
 
             Spacer(Modifier.height(12.dp))
 
-            // Past 14-day color history strip — tappable, opens Streaks & Stats
-            ColorHistoryStrip(
-                capturedDayIndices = state.capturedDayIndices,
-                now = now,
-                onClick = onOpenStats
-            )
-
-            Spacer(Modifier.weight(1f))
-
-            // Action buttons — the capture CTA is framed as today's mission
+            // Action buttons — the capture CTA is framed as today's mission. Min (not
+            // fixed) height + 2 lines so large font sizes grow the button instead of
+            // clipping its label (BUG-013).
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Button(
                     onClick = onOpenCamera,
-                    modifier = Modifier.weight(1f).height(56.dp),
+                    modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 56.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = animatedColor),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Icon(Icons.Default.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        if (state.capturedToday) "Capture More" else "Find ${color?.name ?: "Color"}",
+                        if (state.capturedToday) stringResource(R.string.home_capture_more)
+                        else stringResource(
+                            R.string.home_find_color,
+                            color?.let { colorDisplayName(it.name) } ?: stringResource(R.string.home_color_fallback)
+                        ),
                         style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
                     )
                 }
 
                 OutlinedButton(
                     onClick = onOpenGallery,
-                    modifier = Modifier.weight(1f).height(56.dp),
+                    modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 56.dp),
                     shape = RoundedCornerShape(16.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, animatedColor)
                 ) {
                     Icon(Icons.Default.CollectionsBookmark, contentDescription = null, tint = animatedColor)
                     Spacer(Modifier.width(8.dp))
-                    Text("Gallery", color = animatedColor, style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        stringResource(R.string.gallery_title),
+                        color = animatedColor,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 
@@ -352,13 +396,17 @@ fun HomeScreen(
 
             // Gesture affordance
             Text(
-                "← gallery  •  camera →  •  ↑ walks  •  ↓ settings",
+                stringResource(R.string.home_gesture_hint),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
             )
 
-            // Space for the peek strip overlay below
-            Spacer(Modifier.height(if (recentPhotos.isNotEmpty()) 116.dp else 20.dp))
+            // Space for the peek strip overlay below, above the navigation bar (BUG-033)
+            Spacer(
+                Modifier
+                    .navigationBarsPadding()
+                    .height(if (recentPhotos.isNotEmpty()) 116.dp else 20.dp)
+            )
         }
 
         // Confetti celebration overlay — mounted only while Home is actually the
@@ -371,6 +419,12 @@ fun HomeScreen(
                     accentColor = animatedColor,
                     onDone = { viewModel.onCelebrationDone() }
                 )
+                // BUG-038: swiping away mid-confetti unmounts the overlay without
+                // onDone — it then replayed from the start on every return. Leaving
+                // counts as seen. (Idempotent with the normal onDone path.)
+                DisposableEffect(celebration) {
+                    onDispose { viewModel.onCelebrationDone() }
+                }
             }
         }
 
@@ -384,7 +438,7 @@ fun HomeScreen(
         ) {
             Icon(
                 Icons.Default.Settings,
-                contentDescription = "Settings",
+                contentDescription = stringResource(R.string.settings_title),
                 tint = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.size(28.dp)
             )
@@ -399,6 +453,7 @@ fun HomeScreen(
                 onClick = onOpenNewsfeed,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()   // BUG-033: not half-hidden under 3-button nav
                     .graphicsLayer { alpha = newsfeedPeekAlpha() }
             )
         }
@@ -477,7 +532,7 @@ private fun NewsfeedPeekStrip(
                 modifier = Modifier.size(13.dp)
             )
             Text(
-                "Your walks",
+                stringResource(R.string.home_your_walks),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = accentColor,
@@ -541,7 +596,7 @@ private fun ColorHeroWithRing(
                 if (capturedToday) {
                     Icon(
                         Icons.Default.LocalFireDepartment,
-                        contentDescription = "Captured today",
+                        contentDescription = stringResource(R.string.home_captured_today),
                         tint = Color.White,  // always white — sits on the accent color circle
                         modifier = Modifier.size(48.dp)
                     )
@@ -551,9 +606,12 @@ private fun ColorHeroWithRing(
         if (nextMilestone != null && streak > 0) {
             Spacer(Modifier.height(8.dp))
             Text(
-                "${nextMilestone - streak} day${if (nextMilestone - streak != 1) "s" else ""} to ${milestoneEmoji(nextMilestone)} $nextMilestone",
+                pluralStringResource(
+                    R.plurals.home_days_to_milestone, nextMilestone - streak,
+                    nextMilestone - streak, milestoneEmoji(nextMilestone), nextMilestone
+                ),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
             )
         }
     }
@@ -606,26 +664,34 @@ private fun ColorHistoryStrip(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClickLabel = "Open streaks and stats", onClick = onClick)
+            // Touch anywhere on the strip opens Stats. Pointer-only: for TalkBack each
+            // day cell carries the action itself (BUG-039 — focusing a cell and
+            // double-tapping used to do nothing).
+            .pointerInput(onClick) { detectTapGestures { onClick() } }
             .padding(vertical = 4.dp)
     ) {
         items(14) { offset ->
             val entry = dayData[offset]
             val captured = entry.dayIndex in capturedDayIndices
             val isTodayEntry = entry.dayIndex == todayIndex
-            val statusLabel = when {
-                isTodayEntry && captured -> "today, captured"
-                isTodayEntry -> "today, not captured yet"
-                captured -> "captured"
-                else -> "not captured"
-            }
+            val statusLabel = stringResource(
+                when {
+                    isTodayEntry && captured -> R.string.home_day_today_captured
+                    isTodayEntry -> R.string.home_day_today_pending
+                    captured -> R.string.home_day_captured
+                    else -> R.string.home_day_not_captured
+                }
+            )
+            val cellColorName = colorDisplayName(entry.colorName)
+            val openStatsLabel = stringResource(R.string.home_open_stats)
 
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .width(20.dp)
                     .semantics(mergeDescendants = true) {
-                        contentDescription = "${entry.weekdayFullName}, ${entry.colorName}, $statusLabel"
+                        contentDescription = "${entry.weekdayFullName}, $cellColorName, $statusLabel"
+                        onClick(label = openStatsLabel) { onClick(); true }
                     }
             ) {
                 Box(
@@ -641,9 +707,9 @@ private fun ColorHistoryStrip(
                 Spacer(Modifier.height(3.dp))
                 Text(
                     entry.weekdayLabel,
-                    fontSize = 9.sp,
+                    fontSize = 11.sp,   // BUG-039: 9sp was below legible size
                     color = MaterialTheme.colorScheme.onBackground.copy(
-                        alpha = if (isTodayEntry) 0.8f else 0.4f
+                        alpha = if (isTodayEntry) 0.9f else 0.7f
                     ),
                     fontWeight = if (isTodayEntry) FontWeight.Bold else FontWeight.Normal
                 )
@@ -706,7 +772,7 @@ private fun CelebrationOverlay(
                         Text(milestoneEmoji(days), fontSize = 52.sp)
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            "$days Day Streak!",
+                            pluralStringResource(R.plurals.home_milestone_title, days, days),
                             fontSize = 28.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = accentColor,
@@ -714,7 +780,7 @@ private fun CelebrationOverlay(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            milestoneMessage(days),
+                            milestoneMessage(LocalContext.current, days),
                             fontSize = 14.sp,
                             color = Color.White.copy(alpha = 0.65f),
                             textAlign = TextAlign.Center,
@@ -742,20 +808,22 @@ private fun milestoneEmoji(days: Int) = when (days) {
     else -> "🎉"
 }
 
-private fun milestoneMessage(days: Int) = when (days) {
-    7    -> "One full week of color walks!"
-    21   -> "Three weeks strong. This is a habit now."
-    30   -> "A full month. You have a true eye for color."
-    50   -> "50 days. Extraordinary commitment."
-    100  -> "100 days. You are a legend."
-    150  -> "150 days. Half a year of seeing the world in color."
-    180  -> "6 months. Your eye for color is truly refined."
-    200  -> "200 days. An artist's dedication."
-    240  -> "8 months. Remarkable. Absolutely remarkable."
-    300  -> "300 days. You have transformed how you see the world."
-    365  -> "One full year. 365 days of color walks. This is who you are now."
-    else -> "Incredible streak!"
-}
+private fun milestoneMessage(context: Context, days: Int) = context.getString(
+    when (days) {
+        7    -> R.string.milestone_7
+        21   -> R.string.milestone_21
+        30   -> R.string.milestone_30
+        50   -> R.string.milestone_50
+        100  -> R.string.milestone_100
+        150  -> R.string.milestone_150
+        180  -> R.string.milestone_180
+        200  -> R.string.milestone_200
+        240  -> R.string.milestone_240
+        300  -> R.string.milestone_300
+        365  -> R.string.milestone_365
+        else -> R.string.milestone_other
+    }
+)
 
 private fun dailyParties(accentArgb: Int): List<Party> = listOf(
     Party(

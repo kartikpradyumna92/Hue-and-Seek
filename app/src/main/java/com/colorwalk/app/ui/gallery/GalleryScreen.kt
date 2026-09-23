@@ -5,10 +5,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import com.colorwalk.app.ui.components.PhotoRevisions
+import com.colorwalk.app.ui.components.rememberDayTick
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -54,8 +61,12 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
 
-private val TAB_LABELS = listOf("By Color", "By Date", "By Place")
+private val TAB_LABELS = listOf(R.string.gallery_tab_color, R.string.gallery_tab_date, R.string.gallery_tab_place)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -69,39 +80,104 @@ fun GalleryScreen(
     onEdgeDragStart: () -> Unit = {},
     onEdgeDrag: (dx: Float, uptimeMillis: Long) -> Unit = { _, _ -> },
     onEdgeDragEnd: () -> Unit = {},
+    // True only while Gallery is the settled, on-screen hub pane (gates system back).
+    isActive: Boolean = true,
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
-    val colorFolderCards   by viewModel.colorFolderCards.collectAsState()
-    val allPhotos          by viewModel.allPhotos.collectAsState()
-    val photosByPlace      by viewModel.photosByPlace.collectAsState()
-    val viewMode           by viewModel.viewMode.collectAsState()
+    val viewerState        by viewModel.viewerState.collectAsState()
     val selectedColor      by viewModel.selectedColor.collectAsState()
     val selectedPlace      by viewModel.selectedPlace.collectAsState()
-    val viewerState        by viewModel.viewerState.collectAsState()
-    val searchQuery        by viewModel.searchQuery.collectAsState()
-    val dateFilter         by viewModel.dateFilter.collectAsState()
-    val dateSortOrder      by viewModel.dateSortOrder.collectAsState()
-    val hasUntaggedPhotos  by viewModel.hasUntaggedPhotos.collectAsState()
-    val untaggedPhotos     by viewModel.untaggedPhotos.collectAsState()
     val showingUntagged    by viewModel.showingUntagged.collectAsState()
 
-    // Full-screen viewer takes priority over everything
-    if (viewerState != null) {
-        val shareContext = LocalContext.current
-        PhotoViewerScreen(
-            photos = viewerState!!.photos,
-            initialIndex = viewerState!!.initialIndex,
-            onClose = { viewModel.closePhoto() },
-            onDelete = { viewModel.deletePhoto(it) },
-            onRotate = { photo, onDone -> viewModel.rotatePhoto(photo, onDone) },
-            onSaveDescription = { photo, text -> viewModel.saveDescription(photo, text) },
-            onPageChanged = { viewModel.onViewerPageChanged(it) },
-            onShare = { photo ->
-                // M-12: always share a private file through the FileProvider — legacy
-                // content:// rows are copied/migrated by the repository first, since
-                // read grants can't be minted for MediaStore URIs the app doesn't own.
-                viewModel.prepareShare(photo) { file ->
-                    if (file != null) {
+    // BUG-063: the date filters ("This Week" …) are relative to today — refresh them
+    // at midnight while the app stays open.
+    val dayTick = rememberDayTick()
+    LaunchedEffect(dayTick) { viewModel.onDayChanged(dayTick) }
+
+    // BUG-029: tab grid scroll positions live up here, above the album/tab switch, so
+    // they survive opening an album (and a photo) and coming back.
+    val colorGridState = rememberLazyGridState()
+    val dateGridState = rememberLazyGridState()
+    val placeGridState = rememberLazyGridState()
+
+    // BUG-007: system back walks back through Gallery's own layers — viewer (its own
+    // handler, composed later, so it wins), then album/untagged — instead of jumping
+    // the hub to Home. Only while Gallery is the settled pane: the hub keeps Gallery
+    // composed while the user is elsewhere, and a stale album must not eat Home's back.
+    BackHandler(enabled = isActive && (selectedColor != null || selectedPlace != null || showingUntagged)) {
+        when {
+            selectedColor != null -> viewModel.clearSelection()
+            selectedPlace != null -> viewModel.clearPlaceSelection()
+            else -> viewModel.closeUntagged()
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        // BUG-029: the album/tabs stay composed under the viewer — replacing them with
+        // it threw their LazyGridState (scroll position) away on every photo opened.
+        // Hidden from accessibility while covered.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .then(if (viewerState != null) Modifier.clearAndSetSemantics { } else Modifier)
+        ) {
+            when {
+                selectedColor != null -> ColorAlbumScreen(
+                    colorName = selectedColor!!,
+                    viewModel = viewModel,
+                    onBack = { viewModel.clearSelection() }
+                )
+                selectedPlace != null -> PlaceAlbumScreen(
+                    locationName = selectedPlace!!,
+                    viewModel = viewModel,
+                    onBack = { viewModel.clearPlaceSelection() }
+                )
+                showingUntagged -> UntaggedAlbumScreen(
+                    viewModel = viewModel,
+                    onBack = { viewModel.closeUntagged() }
+                )
+                else -> GalleryTabs(
+                    viewModel = viewModel,
+                    onBack = onBack,
+                    onEdgeDragStart = onEdgeDragStart,
+                    onEdgeDrag = onEdgeDrag,
+                    onEdgeDragEnd = onEdgeDragEnd,
+                    colorGridState = colorGridState,
+                    dateGridState = dateGridState,
+                    placeGridState = placeGridState
+                )
+            }
+        }
+
+        viewerState?.let { vs ->
+            val shareContext = LocalContext.current
+            PhotoViewerScreen(
+                photos = vs.photos,
+                initialIndex = vs.initialIndex,
+                backEnabled = isActive,
+                onClose = { viewModel.closePhoto() },
+                onDelete = { viewModel.deletePhoto(it) },
+                onRotate = { photo, onDone ->
+                    viewModel.rotatePhoto(photo) { ok ->
+                        // BUG-030: refresh this photo on every screen (grids, feed, peek).
+                        if (ok) PhotoRevisions.bump(photo.filePath)
+                        // BUG-059: a failed rotation used to look like it silently worked.
+                        else Toast.makeText(shareContext, R.string.error_rotate_photo, Toast.LENGTH_SHORT).show()
+                        onDone(ok)
+                    }
+                },
+                onSaveDescription = { photo, text -> viewModel.saveDescription(photo, text) },
+                onPageChanged = { viewModel.onViewerPageChanged(it) },
+                onShare = { photo ->
+                    // M-12: always share a private file through the FileProvider — legacy
+                    // content:// rows are copied/migrated by the repository first, since
+                    // read grants can't be minted for MediaStore URIs the app doesn't own.
+                    viewModel.prepareShare(photo) { file ->
+                        if (file == null) {
+                            // BUG-059: the tap used to do nothing at all.
+                            Toast.makeText(shareContext, R.string.error_share_photo, Toast.LENGTH_SHORT).show()
+                            return@prepareShare
+                        }
                         val uri = androidx.core.content.FileProvider.getUriForFile(
                             shareContext, "${shareContext.packageName}.fileprovider", file
                         )
@@ -115,36 +191,34 @@ fun GalleryScreen(
                         } catch (_: Exception) { /* no share targets — never crash */ }
                     }
                 }
-            }
-        )
-        return
+            )
+        }
     }
+}
 
-    if (selectedColor != null) {
-        ColorAlbumScreen(
-            colorName = selectedColor!!,
-            viewModel = viewModel,
-            onBack = { viewModel.clearSelection() }
-        )
-        return
-    }
-
-    if (selectedPlace != null) {
-        PlaceAlbumScreen(
-            locationName = selectedPlace!!,
-            viewModel = viewModel,
-            onBack = { viewModel.clearPlaceSelection() }
-        )
-        return
-    }
-
-    if (showingUntagged) {
-        UntaggedAlbumScreen(
-            viewModel = viewModel,
-            onBack = { viewModel.closeUntagged() }
-        )
-        return
-    }
+/** The By Color / By Date / By Place tabs with their pager (Gallery's root layer). */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GalleryTabs(
+    viewModel: GalleryViewModel,
+    onBack: () -> Unit,
+    onEdgeDragStart: () -> Unit,
+    onEdgeDrag: (dx: Float, uptimeMillis: Long) -> Unit,
+    onEdgeDragEnd: () -> Unit,
+    colorGridState: LazyGridState,
+    dateGridState: LazyGridState,
+    placeGridState: LazyGridState
+) {
+    val colorFolderCards   by viewModel.colorFolderCards.collectAsState()
+    val allPhotos          by viewModel.allPhotos.collectAsState()
+    val photosByMonth      by viewModel.photosByMonth.collectAsState()
+    val photosByPlace      by viewModel.photosByPlace.collectAsState()
+    val viewMode           by viewModel.viewMode.collectAsState()
+    val searchQuery        by viewModel.searchQuery.collectAsState()
+    val dateFilter         by viewModel.dateFilter.collectAsState()
+    val dateSortOrder      by viewModel.dateSortOrder.collectAsState()
+    val hasUntaggedPhotos  by viewModel.hasUntaggedPhotos.collectAsState()
+    val untaggedPhotos     by viewModel.untaggedPhotos.collectAsState()
 
     Column(
         modifier = Modifier
@@ -162,12 +236,12 @@ fun GalleryScreen(
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = stringResource(R.string.action_back),
                     tint = MaterialTheme.colorScheme.onBackground
                 )
             }
             Text(
-                "Gallery",
+                stringResource(R.string.gallery_title),
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(start = Spacing.xs)
@@ -210,7 +284,7 @@ fun GalleryScreen(
                     onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
                     text = {
                         Text(
-                            TAB_LABELS[index],
+                            stringResource(TAB_LABELS[index]),
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1
                         )
@@ -264,13 +338,16 @@ fun GalleryScreen(
         ) { page ->
             when (GalleryViewMode.entries[page]) {
                 GalleryViewMode.COLOR -> ColorTab(
+                    gridState = colorGridState,
                     folders = colorFolderCards,
                     searchQuery = searchQuery,
                     onQueryChange = { viewModel.setSearchQuery(it) },
                     onColorClick = { viewModel.selectColor(it) }
                 )
                 GalleryViewMode.DATE -> DateTab(
+                    gridState = dateGridState,
                     photos = allPhotos,
+                    photosByMonth = photosByMonth,
                     dateFilter = dateFilter,
                     sortOrder = dateSortOrder,
                     onFilterChange = { viewModel.setDateFilter(it) },
@@ -279,6 +356,7 @@ fun GalleryScreen(
                     onOpen = { viewModel.openPhoto(it, allPhotos) }
                 )
                 GalleryViewMode.PLACE -> PlaceTab(
+                    gridState = placeGridState,
                     places = photosByPlace,
                     hasUntagged = hasUntaggedPhotos,
                     untaggedCount = untaggedPhotos.size,
@@ -296,6 +374,7 @@ fun GalleryScreen(
 
 @Composable
 private fun ColorTab(
+    gridState: LazyGridState,
     folders: List<ColorFolderInfo>,
     searchQuery: String,
     onQueryChange: (String) -> Unit,
@@ -310,15 +389,19 @@ private fun ColorTab(
         if (folders.isEmpty()) {
             if (searchQuery.isNotBlank()) {
                 EmptyState(
-                    title = "No colors matching \"$searchQuery\"",
-                    subtitle = "Try a different search term"
+                    title = stringResource(R.string.gallery_search_empty_title, searchQuery),
+                    subtitle = stringResource(R.string.gallery_search_empty_body)
                 )
             } else {
-                EmptyState(title = "No photos yet", subtitle = "Start your first color walk!")
+                EmptyState(
+                title = stringResource(R.string.empty_no_photos_title),
+                subtitle = stringResource(R.string.empty_no_photos_body)
+            )
             }
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
+                state = gridState,
                 contentPadding = PaddingValues(Spacing.l),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.m),
                 verticalArrangement = Arrangement.spacedBy(Spacing.m)
@@ -350,7 +433,10 @@ private fun ColorFolderCard(folder: ColorFolderInfo, onClick: () -> Unit) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
                 model = photoImageRequest(context, folder.thumbnailPath),
-                contentDescription = "${folder.colorName} album, ${folder.photoCount} photos",
+                contentDescription = pluralStringResource(
+                    R.plurals.gallery_color_album_desc, folder.photoCount,
+                    colorDisplayName(folder.colorName), folder.photoCount
+                ),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
@@ -380,7 +466,7 @@ private fun ColorFolderCard(folder: ColorFolderInfo, onClick: () -> Unit) {
                     )
                     Spacer(Modifier.width(Spacing.s))
                     Text(
-                        folder.colorName,
+                        colorDisplayName(folder.colorName),
                         style = MaterialTheme.typography.titleLarge,
                         color = Color.White,
                         modifier = Modifier.weight(1f),
@@ -407,7 +493,7 @@ private fun ColorSearchBar(
         value = query,
         onValueChange = onQueryChange,
         modifier = modifier.fillMaxWidth(),
-        placeholder = { Text("Search colors…", style = MaterialTheme.typography.bodyMedium) },
+        placeholder = { Text(stringResource(R.string.gallery_search_hint), style = MaterialTheme.typography.bodyMedium) },
         leadingIcon = {
             Icon(Icons.Default.Search, contentDescription = null,
                 modifier = Modifier.size(18.dp))
@@ -415,7 +501,7 @@ private fun ColorSearchBar(
         trailingIcon = {
             if (query.isNotEmpty()) {
                 IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Default.Clear, contentDescription = "Clear search",
+                    Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.gallery_search_clear),
                         modifier = Modifier.size(18.dp))
                 }
             }
@@ -429,7 +515,9 @@ private fun ColorSearchBar(
 
 @Composable
 private fun DateTab(
+    gridState: LazyGridState,
     photos: List<PhotoEntity>,
+    photosByMonth: List<Pair<String, List<PhotoEntity>>>,
     dateFilter: DateFilter,
     sortOrder: AlbumSortOrder,
     onFilterChange: (DateFilter) -> Unit,
@@ -448,7 +536,7 @@ private fun DateTab(
                 FilterChip(
                     selected = dateFilter == filter,
                     onClick = { onFilterChange(filter) },
-                    label = { Text(filter.label, style = MaterialTheme.typography.labelMedium) }
+                    label = { Text(stringResource(filter.label), style = MaterialTheme.typography.labelMedium) }
                 )
             }
         }
@@ -460,7 +548,7 @@ private fun DateTab(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "Sort:",
+                stringResource(R.string.gallery_sort_label),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -468,49 +556,48 @@ private fun DateTab(
                 FilterChip(
                     selected = sortOrder == order,
                     onClick = { onSortChange(order) },
-                    label = { Text(order.label, style = MaterialTheme.typography.labelMedium) }
+                    label = { Text(stringResource(order.label), style = MaterialTheme.typography.labelMedium) }
                 )
             }
         }
 
         if (photos.isEmpty()) {
             if (dateFilter != DateFilter.ALL) {
-                EmptyState(title = "No photos in this period", subtitle = "Try a different time range")
+                EmptyState(
+                    title = stringResource(R.string.gallery_period_empty_title),
+                    subtitle = stringResource(R.string.gallery_period_empty_body)
+                )
             } else {
-                EmptyState(title = "No photos yet", subtitle = "Start your first color walk!")
+                EmptyState(
+                title = stringResource(R.string.empty_no_photos_title),
+                subtitle = stringResource(R.string.empty_no_photos_body)
+            )
             }
         } else {
-            DatePhotoGrid(photos = photos, sortOrder = sortOrder, onDelete = onDelete, onOpen = onOpen)
+            DatePhotoGrid(gridState = gridState, grouped = photosByMonth, onDelete = onDelete, onOpen = onOpen)
         }
     }
 }
 
 @Composable
 private fun DatePhotoGrid(
-    photos: List<PhotoEntity>,
-    sortOrder: AlbumSortOrder,
+    gridState: LazyGridState,
+    // Grouped and ordered in GalleryViewModel.photosByMonth, off the main thread (BUG-041).
+    grouped: List<Pair<String, List<PhotoEntity>>>,
     onDelete: (PhotoEntity) -> Unit,
     onOpen: (PhotoEntity) -> Unit
 ) {
-    val grouped = remember(photos, sortOrder) {
-        val fmt = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
-        val entries = photos
-            .groupBy { fmt.format(Date(it.dateTaken)) }
-            .entries
-        when (sortOrder) {
-            AlbumSortOrder.NEWEST -> entries.sortedByDescending { it.value.first().dateTaken }
-            AlbumSortOrder.OLDEST -> entries.sortedBy { it.value.first().dateTaken }
-        }
-    }
-
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
+        state = gridState,
         contentPadding = PaddingValues(Spacing.l),
         horizontalArrangement = Arrangement.spacedBy(Spacing.s),
         verticalArrangement = Arrangement.spacedBy(Spacing.s)
     ) {
         grouped.forEach { (monthYear, monthPhotos) ->
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            // Typed keys: headers can never collide with photo ids (Long) — and a
+            // stable key lets the restored scroll position land on the same item.
+            item(key = "month:$monthYear", span = { GridItemSpan(maxLineSpan) }) {
                 Text(
                     monthYear,
                     style = MaterialTheme.typography.titleLarge,
@@ -537,6 +624,7 @@ private fun DatePhotoGrid(
 
 @Composable
 private fun PlaceTab(
+    gridState: LazyGridState,
     places: List<PlaceSummary>,
     hasUntagged: Boolean,
     untaggedCount: Int,
@@ -548,14 +636,18 @@ private fun PlaceTab(
     if (places.isEmpty() && !hasUntagged) {
         if (anyPhotosExist) {
             EmptyState(
-                title = "No location data",
-                subtitle = "Photos need location available at capture time to appear here"
+                title = stringResource(R.string.gallery_place_empty_title),
+                subtitle = stringResource(R.string.gallery_place_empty_body)
             )
         } else {
-            EmptyState(title = "No photos yet", subtitle = "Start your first color walk!")
+            EmptyState(
+                title = stringResource(R.string.empty_no_photos_title),
+                subtitle = stringResource(R.string.empty_no_photos_body)
+            )
         }
     } else {
         PlaceFolderGrid(
+            gridState = gridState,
             places = places,
             onPlaceClick = onPlaceClick,
             hasUntagged = hasUntagged,
@@ -568,6 +660,7 @@ private fun PlaceTab(
 
 @Composable
 private fun PlaceFolderGrid(
+    gridState: LazyGridState,
     places: List<PlaceSummary>,
     onPlaceClick: (String) -> Unit,
     hasUntagged: Boolean = false,
@@ -577,15 +670,19 @@ private fun PlaceFolderGrid(
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
+        state = gridState,
         contentPadding = PaddingValues(Spacing.l),
         horizontalArrangement = Arrangement.spacedBy(Spacing.m),
         verticalArrangement = Arrangement.spacedBy(Spacing.m)
     ) {
-        items(places, key = { it.locationName }) { place ->
+        // BUG-061: keys are namespaced by item type — a place the user named
+        // "untagged_card" collided with the untagged card's fixed key and crashed
+        // the grid (duplicate LazyGrid key).
+        items(places, key = { "place:${it.locationName}" }) { place ->
             PlaceFolderCard(place = place, onClick = { onPlaceClick(place.locationName) })
         }
         if (hasUntagged) {
-            item(key = "untagged_card") {
+            item(key = "untagged:card") {
                 UntaggedFolderCard(
                     count = untaggedCount,
                     thumbnailPath = untaggedThumbnail,
@@ -655,7 +752,7 @@ private fun UntaggedFolderCard(
                         )
                         Spacer(Modifier.width(3.dp))
                         Text(
-                            "Needs Location",
+                            stringResource(R.string.gallery_needs_location),
                             style = MaterialTheme.typography.titleSmall,
                             color = Color.White,
                             maxLines = 1,
@@ -664,7 +761,7 @@ private fun UntaggedFolderCard(
                     }
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "$count photo${if (count != 1) "s" else ""}  •  Tap to tag",
+                        pluralStringResource(R.plurals.gallery_untagged_count, count, count),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White.copy(alpha = 0.8f)
                     )
@@ -688,7 +785,10 @@ private fun PlaceFolderCard(place: PlaceSummary, onClick: () -> Unit) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
                 model = photoImageRequest(context, place.thumbnailPath),
-                contentDescription = "${place.locationName}, ${place.photoCount} photos",
+                contentDescription = pluralStringResource(
+                    R.plurals.gallery_place_album_desc, place.photoCount,
+                    place.locationName, place.photoCount
+                ),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
@@ -723,7 +823,7 @@ private fun PlaceFolderCard(place: PlaceSummary, onClick: () -> Unit) {
                     }
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "${place.photoCount} photo${if (place.photoCount != 1) "s" else ""}",
+                        pluralStringResource(R.plurals.photo_count, place.photoCount, place.photoCount),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White.copy(alpha = 0.8f)
                     )

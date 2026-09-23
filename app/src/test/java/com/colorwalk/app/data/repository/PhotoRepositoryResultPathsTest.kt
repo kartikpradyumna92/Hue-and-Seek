@@ -10,6 +10,7 @@ import com.colorwalk.app.data.db.AppDatabase
 import com.colorwalk.app.data.db.PhotoDao
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.domain.ColorValidator
+import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.domain.WALK_COLORS
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -52,7 +53,11 @@ class PhotoRepositoryResultPathsTest {
             every { openInputStream(any()) } returns null
             every { openFileDescriptor(any(), any()) } returns null
         }
-        context = mockk(relaxed = true) { every { contentResolver } returns resolver }
+        context = mockk(relaxed = true) {
+            every { contentResolver } returns resolver
+            // A real directory: the free-space check (BUG-049) reads usableSpace.
+            every { filesDir } returns java.nio.file.Files.createTempDirectory("cw").toFile()
+        }
         dao = mockk(relaxed = true)
         files = mockk(relaxed = true)
         location = mockk(relaxed = true) {
@@ -81,7 +86,8 @@ class PhotoRepositoryResultPathsTest {
 
     private fun row(dateTaken: Long, size: Long?) = PhotoEntity(
         id = 1L, filePath = "/photos/x.jpg", colorName = target.name, colorHex = target.hex,
-        dateTaken = dateTaken, latitude = null, longitude = null, locationName = null,
+        dateTaken = dateTaken, dayIndex = StreakCalculator.epochMillisToDayIndex(dateTaken),
+        latitude = null, longitude = null, locationName = null,
         dominantColorHex = target.hex, originalSizeBytes = size
     )
 
@@ -175,7 +181,134 @@ class PhotoRepositoryResultPathsTest {
         coEvery { dao.getByDateTakenSecond(now / 1000) } returns listOf(row(now - 200, size = 111L))
         every { files.decodeBoundedFromUri(any()) } returns null // stop right after the dedup gate
 
-        assertEquals(ImportResult.StorageError, repo.importPhoto(mockk(), target))
+        assertEquals(ImportResult.Unreadable, repo.importPhoto(mockk(), target))
         verify { files.decodeBoundedFromUri(any()) } // proof the gate was passed
+    }
+
+    // ── storage fixes ────────────────────────────────────────────────────────
+
+    /** Stubs a passing import of a photo taken at [dateMillis]; returns the stored file. */
+    private fun stubPassingImport(dateMillis: Long): File {
+        stubDateCursor(dateMillis)
+        every { files.decodeBoundedFromUri(any()) } returns mockk(relaxed = true)
+        every { ColorValidator.validate(any(), any()) } returns validation(passed = true)
+        val stored = File.createTempFile("colorwalk", ".jpg").apply { deleteOnExit() }
+        every { files.copyFromUri(any(), any(), false) } returns stored
+        every { files.transcodeToJpeg(any(), any()) } returns stored
+        coEvery { dao.insert(any()) } returns 11L
+        return stored
+    }
+
+    private fun startOfToday(): Long = java.util.Calendar.getInstance().apply {
+        set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    @Test
+    fun importPhoto_graceWindowPhotoFromLateYesterday_isCreditedToToday() = runTest {
+        // BUG-018: 23:00 yesterday is inside isToday()'s ±4 h window and validated
+        // against TODAY's color — so it must count for today, not back-fill yesterday.
+        val lateYesterday = startOfToday() - 60 * 60 * 1000L
+        stubPassingImport(lateYesterday)
+
+        assertTrue(repo.importPhoto(mockk(), target) is ImportResult.Success)
+        val today = StreakCalculator.epochMillisToDayIndex(System.currentTimeMillis())
+        coVerify { dao.insert(match { it.dayIndex == today && it.dateTaken == lateYesterday }) }
+    }
+
+    @Test
+    fun importPhoto_publishesAnAlbumCopyForRecovery() = runTest {
+        // BUG-020: without a Pictures/ColorWalk copy, a reinstall can't recover it.
+        val now = System.currentTimeMillis()
+        val stored = stubPassingImport(now)
+
+        repo.importPhoto(mockk(), target)
+
+        verify(timeout = 3000) {
+            mediaGallery.publishFile(stored, any(), now, any(), any(), target.name, any())
+        }
+    }
+
+    @Test
+    fun importPhoto_nameAlreadyTaken_usesASuffixedName_andNeverReusesTheFile() = runTest {
+        // BUG-019: a same-second burst shot must get its own file.
+        val now = System.currentTimeMillis() / 1000 * 1000   // EXIF-style, ms = 0
+        stubPassingImport(now)
+        every { files.exists(any()) } returnsMany listOf(true, false)
+
+        repo.importPhoto(mockk(), target)
+
+        verify { files.copyFromUri(match { it.endsWith("_0_2.jpg") }, any(), false) }
+        verify(exactly = 0) { files.copyFromUri(any(), any(), true) }
+    }
+
+    @Test
+    fun importPhoto_heifSource_isTranscodedToJpeg() = runTest {
+        // BUG-045: HEIC bytes must not be stored under a .jpg name.
+        stubPassingImport(System.currentTimeMillis())
+        val heifHeader = byteArrayOf(0, 0, 0, 0x18) + "ftypheic".toByteArray() + ByteArray(4)
+        every { resolver.openInputStream(any()) } answers { java.io.ByteArrayInputStream(heifHeader) }
+
+        assertTrue(repo.importPhoto(mockk(), target) is ImportResult.Success)
+        verify { files.transcodeToJpeg(any(), any()) }
+        verify(exactly = 0) { files.copyFromUri(any(), any(), any()) }
+    }
+
+    // ── storage full (BUG-049) ───────────────────────────────────────────────
+
+    @Test
+    fun savePhoto_withNoFreeSpace_isStorageFull_andWritesNothing() = runTest {
+        every { context.filesDir } returns mockk<File> { every { usableSpace } returns 1024L }
+        assertEquals(SaveResult.StorageFull, repo.savePhoto(byteArrayOf(1, 2, 3), target))
+        verify(exactly = 0) { files.saveBytes(any(), any()) }
+    }
+
+    // ── rotate (BUG-059, BUG-060) ────────────────────────────────────────────
+
+    @Test
+    fun rotatePhoto_privateFile_succeeds_andMirrorsOrientationToTheAlbumCopy() = runTest {
+        val photo = row(System.currentTimeMillis(), size = null)
+            .copy(filePath = "/data/files/photos/ColorWalk_20260922_222000_0.jpg")
+
+        assertTrue(repo.rotatePhoto(photo))
+        verify { mediaGallery.writeOrientation("ColorWalk_20260922_222000_0.jpg", any()) }
+    }
+
+    @Test
+    fun rotatePhoto_unresolvableLegacyRow_reportsFailure() = runTest {
+        // content:// row whose bytes are gone: nothing was rotated, and the UI must
+        // be told instead of the old silent no-op.
+        every { files.copyFromUri(any(), any(), any()) } returns null
+        val legacy = row(System.currentTimeMillis(), size = null)
+            .copy(filePath = "content://media/external/images/media/42")
+        mockkStatic(Uri::class)
+        every { Uri.parse(any()) } returns mockk(relaxed = true)
+
+        assertEquals(false, repo.rotatePhoto(legacy))
+        verify(exactly = 0) { files.editExif(any(), any()) }
+    }
+
+    @Test
+    fun rotatePhoto_exifWriteFailure_reportsFailure_andLeavesTheAlbumCopyAlone() = runTest {
+        every { files.editExif(any(), any()) } throws java.io.IOException("read-only")
+        val photo = row(System.currentTimeMillis(), size = null)
+            .copy(filePath = "/data/files/photos/ColorWalk_20260922_222000_0.jpg")
+
+        assertEquals(false, repo.rotatePhoto(photo))
+        verify(exactly = 0) { mediaGallery.writeOrientation(any(), any()) }
+    }
+
+    @Test
+    fun savePhoto_dbInsertFailure_isStorageError_andDoesNotOrphanTheFile() = runTest {
+        // BUG-046: a failed insert used to crash and leave the private file behind.
+        every { files.decodeBounded(any()) } returns mockk<Bitmap>(relaxed = true)
+        every { ColorValidator.validate(any(), any()) } returns validation(passed = true)
+        val written = File.createTempFile("colorwalk", ".jpg")
+        every { files.saveBytes(any(), any()) } returns written
+        coEvery { dao.insert(any()) } throws android.database.sqlite.SQLiteFullException("disk full")
+
+        assertEquals(SaveResult.StorageError, repo.savePhoto(byteArrayOf(1), target))
+        assertTrue("private file must be deleted", !written.exists())
+        verify(exactly = 0) { mediaGallery.publish(any(), any(), any(), any(), any(), any(), any(), any()) }
     }
 }

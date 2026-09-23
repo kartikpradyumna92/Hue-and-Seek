@@ -18,14 +18,14 @@ val keystoreProperties = Properties().apply {
 
 android {
     namespace = "com.colorwalk.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.colorwalk.app"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 26
-        versionName = "1.28.0"
+        targetSdk = 36
+        versionCode = 27
+        versionName = "1.29.0"
     }
 
     signingConfigs {
@@ -56,8 +56,9 @@ android {
         unitTests.isReturnDefaultValues = true   // Android stubs (Log, etc.) return defaults instead of throwing
     }
     lint {
-        // Crashes with an NPE on this Kotlin/Compose-compiler combination (AGP/Lint bug,
-        // tracked alongside the D8 stale-deps note) — disable until the dependency bump.
+        // Compose-runtime lint's ComposableCoroutineCreationDetector crashes with an NPE
+        // (ComposableUtils.isComposable) on this code with Compose BOM 2024.06 — still
+        // reproduced 2026-09-23 under AGP 8.13.2. Re-enable with the Compose BOM bump.
         disable += "CoroutineCreationDuringComposition"
     }
     compileOptions {
@@ -67,11 +68,22 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    kotlin {
+        // BUG-055: compile against JDK 17 whatever JDK launches the build. The Gradle
+        // daemon itself is pinned to 17 by gradle/gradle-daemon-jvm.properties — that
+        // is what keeps Kotlin 2.0.0 / KSP 2.0.0-1.0.21 off JDK 25 (JavaVersion.parse
+        // crash on Android Studio's bundled JBR).
+        jvmToolchain(17)
+    }
     buildFeatures {
         compose = true
     }
     ksp {
         arg("room.schemaLocation", "$projectDir/schemas")
+    }
+    // BUG-028: MigrationTestHelper reads the exported schemas as androidTest assets.
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
     }
     packaging {
         resources {

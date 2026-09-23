@@ -39,6 +39,8 @@ import com.colorwalk.app.ui.theme.Spacing
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.ui.res.stringResource
+import com.colorwalk.app.R
 
 /**
  * The one photo tile used by every grid (color album, date list, place album,
@@ -58,8 +60,12 @@ fun PhotoGridCard(
 ) {
     val context = LocalContext.current
     val dateStr = remember(photo.dateTaken, showTime) {
-        val pattern = if (showTime) "MMM d  •  h:mm a" else "MMM d, yyyy"
-        SimpleDateFormat(pattern, Locale.getDefault()).format(Date(photo.dateTaken))
+        val date = Date(photo.dateTaken)
+        if (showTime) {
+            localizedDateFormat("MMMd").format(date) + "  •  " + formatClockTime(context, date)
+        } else {
+            localizedDateFormat("yMMMd").format(date)
+        }
     }
     var showConfirm by remember { mutableStateOf(false) }
 
@@ -77,7 +83,7 @@ fun PhotoGridCard(
             Box {
                 AsyncImage(
                     model = photoImageRequest(context, photo.filePath),
-                    contentDescription = "${photo.colorName} photo from $dateStr",
+                    contentDescription = stringResource(R.string.photo_desc_at, colorDisplayName(photo.colorName), dateStr),
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -101,7 +107,7 @@ fun PhotoGridCard(
                         ) {
                             Icon(
                                 Icons.Default.Delete,
-                                contentDescription = "Delete photo",
+                                contentDescription = stringResource(R.string.delete_photo_desc),
                                 tint = Color(0xFFEF9A9A),
                                 modifier = Modifier.size(16.dp)
                             )
@@ -120,7 +126,7 @@ fun PhotoGridCard(
                         )
                         Spacer(Modifier.width(Spacing.xs))
                         Text(
-                            photo.colorName,
+                            colorDisplayName(photo.colorName),
                             style = MaterialTheme.typography.labelMedium,
                             color = accentColor
                         )

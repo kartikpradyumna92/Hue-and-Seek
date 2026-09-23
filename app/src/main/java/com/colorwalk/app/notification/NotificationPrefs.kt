@@ -13,6 +13,8 @@ object NotificationPrefs {
     private const val KEY_EVENING_HOUR     = "evening_hour"
     private const val KEY_EVENING_MINUTE   = "evening_minute"
     private const val KEY_THEME            = "theme_mode"
+    private const val KEY_LAST_FIRED_PREFIX = "last_fired_day_"
+    private const val NO_DAY               = Int.MIN_VALUE
 
     // Master toggle
     fun isEnabled(context: Context): Boolean =
@@ -43,6 +45,14 @@ object NotificationPrefs {
     fun getEveningMinute(context: Context): Int = prefs(context).getInt(KEY_EVENING_MINUTE, 0)
     fun setEvening(context: Context, hour: Int, minute: Int) {
         prefs(context).edit().putInt(KEY_EVENING_HOUR, hour).putInt(KEY_EVENING_MINUTE, minute).apply()
+    }
+
+    // Local epoch day each reminder slot last fired for — keeps a slot to one fire
+    // per day even when the inexact alarm window opens early (BUG-004).
+    fun getLastFiredDay(context: Context, slot: String): Int? =
+        prefs(context).getInt(KEY_LAST_FIRED_PREFIX + slot, NO_DAY).takeIf { it != NO_DAY }
+    fun setLastFiredDay(context: Context, slot: String, dayIndex: Int) {
+        prefs(context).edit().putInt(KEY_LAST_FIRED_PREFIX + slot, dayIndex).apply()
     }
 
     fun getThemeMode(context: Context): ThemeMode = try {

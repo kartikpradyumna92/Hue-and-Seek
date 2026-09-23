@@ -3,6 +3,7 @@ package com.colorwalk.app.viewmodel
 import android.content.Context
 import android.content.SharedPreferences
 import app.cash.turbine.test
+import com.colorwalk.app.data.db.PhotoSetSignature
 import com.colorwalk.app.data.repository.PhotoRepository
 import com.colorwalk.app.domain.WALK_COLORS
 import com.colorwalk.app.domain.colorForDay
@@ -12,6 +13,9 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -58,8 +62,12 @@ class HomeViewModelTest {
         coEvery { repo.getCapturedDayIndices() } returns emptySet()
         coEvery { repo.syncGalleryWithDatabase() } returns Unit
         every { repo.getAllPhotos() } returns flowOf(emptyList())
-        every { repo.getDistinctColors() } returns flowOf(emptyList())
+        every { repo.userAddedPhotos } returns userAdded
+        every { repo.getRecentPhotos(any()) } returns flowOf(emptyList())
+        every { repo.observePhotoSetSignature() } returns flowOf(PhotoSetSignature(0, null))
     }
+
+    private val userAdded = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     private fun buildViewModel(): HomeViewModel = HomeViewModel(repo, context)
 
@@ -215,10 +223,8 @@ class HomeViewModelTest {
         // after a capture — the Room emission itself must trigger the celebration.
         val todayIndex = com.colorwalk.app.domain.StreakCalculator
             .epochMillisToDayIndex(System.currentTimeMillis())
-        val photosFlow = kotlinx.coroutines.flow.MutableStateFlow(
-            emptyList<com.colorwalk.app.data.db.PhotoEntity>()
-        )
-        every { repo.getAllPhotos() } returns photosFlow
+        val photosFlow = MutableStateFlow(PhotoSetSignature(0, null))
+        every { repo.observePhotoSetSignature() } returns photosFlow
         coEvery { repo.getStreak() } returns 1
 
         val vm = buildViewModel()
@@ -226,7 +232,7 @@ class HomeViewModelTest {
 
         // Capture lands: DB now reports today's index and Room re-emits the list.
         coEvery { repo.getCapturedDayIndices() } returns setOf(todayIndex)
-        photosFlow.value = listOf(mockk(relaxed = true))
+        photosFlow.value = PhotoSetSignature(1, 1L)
         advanceUntilIdle()
 
         assertTrue(
@@ -236,13 +242,82 @@ class HomeViewModelTest {
 
         // A follow-up emission (async location resolution / note save) must NOT
         // clear the celebration mid-confetti.
-        photosFlow.value = listOf(mockk(relaxed = true), mockk(relaxed = true))
+        photosFlow.value = PhotoSetSignature(2, 2L)
         advanceUntilIdle()
 
         assertTrue(
             "Follow-up DB emissions must not cut an active celebration short",
             vm.state.value.celebrationState is CelebrationState.Daily
         )
+    }
+
+    // ── user captures during startup sync (BUG-038) ──────────────────────────
+
+    private fun todayIndex() = com.colorwalk.app.domain.StreakCalculator
+        .epochMillisToDayIndex(System.currentTimeMillis())
+
+    @Test
+    fun captureDuringStartupSync_stillCelebrates_whenDbEmissionLandsFirst() = runTest {
+        // Sync never finishes during this test, so DB emissions are "fromSync".
+        coEvery { repo.syncGalleryWithDatabase() } coAnswers { awaitCancellation() }
+        val photosFlow = MutableStateFlow(PhotoSetSignature(0, null))
+        every { repo.observePhotoSetSignature() } returns photosFlow
+        coEvery { repo.getStreak() } returns 1
+
+        val vm = buildViewModel()
+        advanceUntilIdle()
+
+        coEvery { repo.getCapturedDayIndices() } returns setOf(todayIndex())
+        photosFlow.value = PhotoSetSignature(1, 1L)   // fromSync load: no confetti…
+        advanceUntilIdle()
+        assertNull(vm.state.value.celebrationState)
+
+        userAdded.emit(Unit)                                // …but it was the USER's capture
+        advanceUntilIdle()
+        assertTrue(vm.state.value.celebrationState is CelebrationState.Daily)
+    }
+
+    @Test
+    fun captureDuringStartupSync_stillCelebrates_whenUserSignalLandsFirst() = runTest {
+        coEvery { repo.syncGalleryWithDatabase() } coAnswers { awaitCancellation() }
+        val photosFlow = MutableStateFlow(PhotoSetSignature(0, null))
+        every { repo.observePhotoSetSignature() } returns photosFlow
+        coEvery { repo.getStreak() } returns 1
+
+        val vm = buildViewModel()
+        advanceUntilIdle()
+
+        coEvery { repo.getCapturedDayIndices() } returns setOf(todayIndex())
+        userAdded.emit(Unit)
+        photosFlow.value = PhotoSetSignature(1, 1L)
+        advanceUntilIdle()
+        assertTrue(vm.state.value.celebrationState is CelebrationState.Daily)
+    }
+
+    @Test
+    fun celebration_claimsTheDayWhenDecided_notWhenConfettiEnds() = runTest {
+        coEvery { repo.getStreak() } returns 1
+        val vm = buildViewModel()
+        advanceUntilIdle()
+
+        coEvery { repo.getCapturedDayIndices() } returns setOf(todayIndex())
+        vm.load(fromSync = false)
+        advanceUntilIdle()
+
+        assertNotNull(vm.state.value.celebrationState)
+        io.mockk.verify { prefsEditor.putInt("last_celebration_day", todayIndex()) }
+    }
+
+    @Test
+    fun userCapture_onAnAlreadyCelebratedDay_doesNotCelebrateAgain() = runTest {
+        every { sharedPrefs.getInt("last_celebration_day", -1) } returns todayIndex()
+        coEvery { repo.getCapturedDayIndices() } returns setOf(todayIndex())
+        val vm = buildViewModel()
+        advanceUntilIdle()
+
+        userAdded.emit(Unit)   // a second photo the same day
+        advanceUntilIdle()
+        assertNull(vm.state.value.celebrationState)
     }
 
     // ── syncGalleryWithDatabase exception handling ────────────────────────────

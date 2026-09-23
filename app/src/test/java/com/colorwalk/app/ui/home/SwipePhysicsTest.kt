@@ -74,6 +74,52 @@ class SwipePhysicsTest {
         assertEquals(1000f, target, 0f)
     }
 
+    // ── interrupted animation (BUG-009) ──────────────────────────────────────
+
+    @Test
+    fun gestureCatchingAMidSlide_anchorsOnTheNearestPage_andStaysContinuous() {
+        val s = SwipePhysics.OnePageDragSession()
+        s.begin(current = 780f, viewportPx = VIEWPORT, boundMin = -1000f, boundMax = 1000f)
+        assertEquals("anchored on a real page", 1000f, s.startValue, 0f)
+        // The first move continues from where the finger caught it — no jump.
+        assertEquals(785f, s.update(5f, 100L), 0f)
+    }
+
+    @Test
+    fun shortDragAfterCatchingMidSlide_settlesOnARealPage() {
+        val s = SwipePhysics.OnePageDragSession()
+        s.begin(current = 780f, viewportPx = VIEWPORT, boundMin = -1000f, boundMax = 1000f)
+        s.update(10f, 100L)
+        // Previously settled back to 780 — two pages half on screen.
+        assertEquals(1000f, s.settleTarget(VIEWPORT), 0f)
+    }
+
+    @Test
+    fun caughtCloserToHome_anchorsOnHome_andCanStillCommitAway() {
+        val s = SwipePhysics.OnePageDragSession()
+        s.begin(current = 300f, viewportPx = VIEWPORT, boundMin = -1000f, boundMax = 1000f)
+        assertEquals(0f, s.startValue, 0f)
+        s.update(100f, 100L)   // now at 400: 40% of a page from the anchor → commit
+        assertEquals(1000f, s.settleTarget(VIEWPORT), 0f)
+    }
+
+    // ── density-aware flick (BUG-042) ────────────────────────────────────────
+
+    @Test
+    fun flickThreshold_scalesWithDensity() {
+        assertEquals(580f, SwipePhysics.flickVelocityPx(1f), 0.01f)
+        assertEquals(1740f, SwipePhysics.flickVelocityPx(3f), 0.01f)
+        // Same physical flick (900 dp/s, 12% travel) commits on a dense phone and a
+        // low-density tablet alike.
+        for (density in listOf(1f, 2f, 3.5f)) {
+            val target = SwipePhysics.settleTarget(
+                START, MIN, MAX, totalDelta = 120f, velocity = 900f * density,
+                viewportPx = VIEWPORT, flickVelocityPx = SwipePhysics.flickVelocityPx(density)
+            )
+            assertEquals("density $density", MAX, target, 0f)
+        }
+    }
+
     // ── velocity estimator ────────────────────────────────────────────────────
 
     @Test

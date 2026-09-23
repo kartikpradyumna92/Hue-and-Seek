@@ -12,6 +12,14 @@
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
 -dontwarn kotlinx.coroutines.debug.*
 
+# BUG-056: strip verbose/debug/info logging from release builds — those calls include
+# private file paths and content URIs. Warnings/errors stay for crash diagnosis.
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+}
+
 # Kotlin metadata (needed for Hilt/KSP reflection)
 -keepattributes *Annotation*
 -keepattributes Signature

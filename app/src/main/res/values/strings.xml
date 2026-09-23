@@ -1,4 +1,332 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Hue &amp; Seek</string>
+
+    <!-- Common -->
+    <string name="action_back">Back</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_save">Save</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_skip">Skip</string>
+    <string name="action_try_again">Try Again</string>
+    <string name="action_open_settings">Open Settings</string>
+    <string name="action_close">Close</string>
+    <string name="action_share">Share</string>
+    <string name="action_rotate">Rotate</string>
+    <string name="zoom_level_desc">%1$s zoom</string>
+    <string name="zoom_level_desc_selected">%1$s zoom, selected</string>
+    <string name="delete_photo_title">Delete photo?</string>
+    <string name="delete_photo_body">This will remove it from the app and your device gallery.</string>
+    <string name="delete_photo_desc">Delete photo</string>
+    <string name="note_hint_write">Write a note about this moment…</string>
+    <string name="note_add_prompt">Add a note…</string>
+    <string name="empty_no_photos_title">No photos yet</string>
+    <string name="empty_no_photos_body">Start your first color walk!</string>
+    <string name="photo_desc">%1$s photo</string>
+    <string name="photo_desc_at">%1$s photo, %2$s</string>
+    <plurals name="photo_count">
+        <item quantity="one">%d photo</item>
+        <item quantity="other">%d photos</item>
+    </plurals>
+
+    <!-- Colour display names (DB keys stay English) -->
+    <string name="color_red">Red</string>
+    <string name="color_orange">Orange</string>
+    <string name="color_yellow">Yellow</string>
+    <string name="color_green">Green</string>
+    <string name="color_blue">Blue</string>
+    <string name="color_purple">Purple</string>
+    <string name="color_pink">Pink</string>
+    <string name="color_brown">Brown</string>
+
+    <!-- Gallery -->
+    <string name="filter_all">All</string>
+    <string name="filter_this_week">This Week</string>
+    <string name="filter_this_month">This Month</string>
+    <string name="filter_last_3_months">Last 3 Months</string>
+    <string name="sort_newest">Newest</string>
+    <string name="sort_oldest">Oldest</string>
+    <string name="gallery_title">Gallery</string>
+    <string name="gallery_tab_color">By Color</string>
+    <string name="gallery_tab_date">By Date</string>
+    <string name="gallery_tab_place">By Place</string>
+    <string name="error_rotate_photo">Couldn\'t rotate this photo</string>
+    <string name="error_share_photo">Couldn\'t share this photo</string>
+    <string name="gallery_search_empty_title">No colors matching \"%1$s\"</string>
+    <string name="gallery_search_empty_body">Try a different search term</string>
+    <string name="gallery_search_hint">Search colors…</string>
+    <string name="gallery_search_clear">Clear search</string>
+    <string name="gallery_sort_label">Sort:</string>
+    <string name="gallery_period_empty_title">No photos in this period</string>
+    <string name="gallery_period_empty_body">Try a different time range</string>
+    <string name="gallery_place_empty_title">No location data</string>
+    <string name="gallery_place_empty_body">Photos need location available at capture time to appear here</string>
+    <string name="gallery_needs_location">Needs Location</string>
+    <plurals name="gallery_untagged_count">
+        <item quantity="one">%d photo  •  Tap to tag</item>
+        <item quantity="other">%d photos  •  Tap to tag</item>
+    </plurals>
+    <plurals name="gallery_color_album_desc">
+        <item quantity="one">%1$s album, %2$d photo</item>
+        <item quantity="other">%1$s album, %2$d photos</item>
+    </plurals>
+    <plurals name="gallery_place_album_desc">
+        <item quantity="one">%1$s, %2$d photo</item>
+        <item quantity="other">%1$s, %2$d photos</item>
+    </plurals>
+    <string name="viewer_position">%1$d / %2$d</string>
+    <string name="viewer_dominant">Dominant %1$s</string>
+    <string name="viewer_show_less">Show less</string>
+    <string name="viewer_show_more">Show more</string>
+    <string name="note_add_desc">Add note</string>
+    <string name="note_edit_desc">Edit note</string>
+    <string name="album_color_empty_title">No %1$s photos</string>
+    <string name="album_color_empty_body">All photos in this album have been deleted.</string>
+    <string name="album_place_empty_title">No photos in %1$s</string>
+    <string name="untagged_title">Tag Older Photos</string>
+    <plurals name="untagged_left">
+        <item quantity="one">%1$d left</item>
+        <item quantity="other">%1$d left</item>
+    </plurals>
+    <string name="untagged_hint">Tap a photo to set its location</string>
+    <string name="untagged_done">All photos tagged!</string>
+    <string name="untagged_set_location">Set Location</string>
+    <string name="untagged_location_label">Location</string>
+    <string name="untagged_location_placeholder">e.g. San Francisco, California</string>
+    <string name="untagged_quick_pick">Quick pick:</string>
+
+    <!-- Camera -->
+    <string name="camera_error_in_use">Another app is using the camera. Close it and try again.</string>
+    <string name="camera_error_disabled">The camera is disabled on this device.</string>
+    <string name="camera_error_stopped">The camera stopped working. Try again.</string>
+    <string name="camera_error_no_lens">This camera isn\'t available on your device.</string>
+    <string name="camera_error_bind">Couldn\'t start the camera. Close other camera apps and try again.</string>
+    <plurals name="camera_live_share_desc">
+        <item quantity="one">%1$d percent of the frame is %2$s</item>
+        <item quantity="other">%1$d percent of the frame is %2$s</item>
+    </plurals>
+    <string name="camera_percent">%1$d%%</string>
+    <string name="camera_or_import">or import from gallery</string>
+    <string name="camera_import">Import from gallery</string>
+    <string name="camera_shutter_desc">Take photo of something %1$s</string>
+    <string name="camera_checking">Checking your photo</string>
+    <string name="camera_switch_back">Switch to back camera</string>
+    <string name="camera_switch_front">Switch to front camera</string>
+    <string name="camera_unavailable">Camera unavailable</string>
+    <string name="camera_color_match">Color Match!</string>
+    <string name="camera_note_title">Add a note to this photo</string>
+    <string name="camera_note_hint">What did you find? Where was it?</string>
+    <string name="camera_permission_title">Camera access required</string>
+    <string name="camera_permission_denied_body">Camera access is turned off for Hue &amp; Seek. Open Settings, tap Permissions → Camera, and choose Allow.</string>
+    <string name="camera_permission_body">Hue &amp; Seek needs camera access to capture your daily color walk photos. Your photos are saved only to your device.</string>
+    <string name="camera_grant_access">Grant Access</string>
+    <string name="camera_fail_more_needed">More %1$s Needed</string>
+    <string name="camera_fail_not_dominant">%1$s Isn\'t Dominant</string>
+    <string name="camera_swatch_target">Target</string>
+    <string name="camera_swatch_dominated">Dominated</string>
+    <string name="camera_fail_share">%1$d%% of the frame was %2$s — needs %3$d%%+.</string>
+    <string name="camera_fail_get_closer">Get closer so it pops!</string>
+    <string name="camera_fail_main_subject">Make it the main subject.</string>
+    <string name="camera_fail_tip">Tip: %1$d%% %2$s was found — try something more purely %3$s.</string>
+    <string name="camera_import_wrong_day">Wrong Day</string>
+    <string name="camera_import_wrong_day_body">Photo taken on %1$s — must be today.</string>
+    <string name="camera_import_no_date">No Date Info</string>
+    <string name="camera_import_no_date_body">This photo has no date metadata — can\'t verify it was taken today.</string>
+    <string name="camera_import_duplicate">Already Imported</string>
+    <string name="camera_import_duplicate_body">This photo is already in your gallery.</string>
+    <string name="camera_import_tampered">Can\'t Verify Photo</string>
+    <string name="camera_import_tampered_body">This photo\'s date metadata looks edited or inconsistent — it can\'t be counted for today\'s walk.</string>
+    <string name="camera_capture_failed">Photo Not Taken</string>
+    <string name="camera_capture_failed_body">The camera couldn\'t take the picture. Hold steady and try again.</string>
+    <string name="camera_storage_full">Storage Full</string>
+    <string name="camera_storage_full_body">Your phone is out of space. Free up some storage, then try again.</string>
+    <string name="camera_import_unreadable">Can\'t Open Photo</string>
+    <string name="camera_import_unreadable_body">This photo couldn\'t be read on your phone. Try a different one.</string>
+    <string name="camera_save_failed">Couldn\'t Save</string>
+    <string name="camera_save_failed_body">Something went wrong saving your photo. Try again.</string>
+
+    <!-- Home -->
+    <string name="home_msg_30_plus">30+ days! You have an extraordinary eye for color.</string>
+    <plurals name="home_msg_21_plus">
+        <item quantity="one">%1$d day — the 30-day mark is close. %2$s was a great find.</item>
+        <item quantity="other">%1$d days — the 30-day mark is close. %2$s was a great find.</item>
+    </plurals>
+    <string name="home_msg_14_plus">Two weeks strong! %1$s was a great find today.</string>
+    <string name="home_msg_7_plus">One full week! Your eye is getting sharper every day.</string>
+    <string name="home_msg_3_plus">Great work! %1$s captured. Keep the momentum!</string>
+    <string name="home_msg_first">First walk complete! Come back tomorrow to build your streak.</string>
+    <string name="home_msg_done">Today\'s walk complete! See you tomorrow.</string>
+    <string name="home_msg_morning">Morning light is perfect for finding %1$s. Go for a walk!</string>
+    <string name="home_msg_midday">Great time for a color walk! %1$s is all around you.</string>
+    <string name="home_msg_afternoon">Afternoon light is golden — %1$s awaits outside.</string>
+    <string name="home_msg_evening">Evening colors pop beautifully. Don\'t miss today\'s %1$s!</string>
+    <string name="home_msg_night">Still time before midnight! Go find some %1$s.</string>
+    <string name="home_todays_color">TODAY\'S COLOR</string>
+    <string name="home_loading">Loading…</string>
+    <plurals name="home_day_streak">
+        <item quantity="one">%d day streak</item>
+        <item quantity="other">%d day streak</item>
+    </plurals>
+    <string name="home_capture_more">Capture More</string>
+    <string name="home_find_color">Find %1$s</string>
+    <string name="home_color_fallback">Color</string>
+    <string name="home_gesture_hint">← gallery  •  camera →  •  ↑ walks  •  ↓ settings</string>
+    <string name="home_your_walks">Your walks</string>
+    <string name="home_captured_today">Captured today</string>
+    <plurals name="home_days_to_milestone">
+        <item quantity="one">%1$d day to %2$s %3$d</item>
+        <item quantity="other">%1$d days to %2$s %3$d</item>
+    </plurals>
+    <string name="home_day_today_captured">today, captured</string>
+    <string name="home_day_today_pending">today, not captured yet</string>
+    <string name="home_day_captured">captured</string>
+    <string name="home_day_not_captured">not captured</string>
+    <string name="home_open_stats">Open streaks and stats</string>
+    <plurals name="home_milestone_title">
+        <item quantity="one">%d Day Streak!</item>
+        <item quantity="other">%d Day Streak!</item>
+    </plurals>
+    <string name="milestone_7">One full week of color walks!</string>
+    <string name="milestone_21">Three weeks strong. This is a habit now.</string>
+    <string name="milestone_30">A full month. You have a true eye for color.</string>
+    <string name="milestone_50">50 days. Extraordinary commitment.</string>
+    <string name="milestone_100">100 days. You are a legend.</string>
+    <string name="milestone_150">150 days. Half a year of seeing the world in color.</string>
+    <string name="milestone_180">6 months. Your eye for color is truly refined.</string>
+    <string name="milestone_200">200 days. An artist\'s dedication.</string>
+    <string name="milestone_240">8 months. Remarkable. Absolutely remarkable.</string>
+    <string name="milestone_300">300 days. You have transformed how you see the world.</string>
+    <string name="milestone_365">One full year. 365 days of color walks. This is who you are now.</string>
+    <string name="milestone_other">Incredible streak!</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_morning_reminder">Morning reminder</string>
+    <string name="settings_evening_reminder">Evening reminder</string>
+    <string name="settings_set">Set</string>
+    <string name="settings_section_about">About</string>
+    <string name="settings_about_tagline">A daily color walk — find today\'s color in the world around you.</string>
+    <string name="settings_version">v%1$s</string>
+    <string name="settings_section_display">Display</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_section_notifications">Notifications</string>
+    <string name="settings_notifications_blocked">Notifications blocked</string>
+    <string name="settings_notifications_blocked_body">Reminders won\'t appear. Tap to enable in system settings.</string>
+    <string name="settings_open">Open</string>
+    <string name="settings_exact_alarm_title">Reminders may be a few minutes off</string>
+    <string name="settings_exact_alarm_body">Allow alarms &amp; reminders for on-time notifications.</string>
+    <string name="settings_allow">Allow</string>
+    <string name="settings_daily_reminders">Daily reminders</string>
+    <string name="settings_daily_reminders_body">Notified only if you haven\'t completed today\'s walk</string>
+    <string name="settings_morning">Morning</string>
+    <string name="settings_evening">Evening</string>
+    <string name="settings_change">Change</string>
+    <string name="settings_last_chance_on">Miss your reminders? A silent last-call nudge arrives around %1$s on days your walk isn\'t done — no sound, no buzz.</string>
+    <string name="settings_last_chance_off">Your evening reminder is late enough to double as the day\'s last call — no extra nudge is sent.</string>
+    <string name="settings_section_privacy">Privacy</string>
+    <string name="settings_location_gallery_title">Location in gallery copies</string>
+    <string name="settings_location_gallery_body">Saves where each photo was taken in its Pictures/ColorWalk copy. Other apps with photo access can read it; the app uses it to restore your places after a reinstall. Applies to photos saved from now on.</string>
+    <string name="settings_location_share_title">Location when sharing</string>
+    <string name="settings_location_share_body">Off: shared photos have their location removed first.</string>
+
+    <!-- Streaks & Stats -->
+    <string name="stats_title">Streaks &amp; Stats</string>
+    <string name="stats_history_heading">YOUR WALK HISTORY</string>
+    <plurals name="unit_days">
+        <item quantity="one">day</item>
+        <item quantity="other">days</item>
+    </plurals>
+    <string name="stats_current_streak">Current streak</string>
+    <string name="stats_best_streak">Best streak</string>
+    <string name="stats_photos_taken">Photos taken</string>
+    <string name="stats_active_days">Active days</string>
+    <string name="stats_favourite_color">FAVOURITE COLOR</string>
+    <string name="stats_next_milestone">NEXT MILESTONE</string>
+    <plurals name="stats_milestone_days">
+        <item quantity="one">%d day</item>
+        <item quantity="other">%d days</item>
+    </plurals>
+    <plurals name="stats_days_to_go">
+        <item quantity="one">%d day to go — keep walking!</item>
+        <item quantity="other">%d days to go — keep walking!</item>
+    </plurals>
+    <plurals name="stats_share_streak">
+        <item quantity="one">🔥 %d-day color walk streak on Hue &amp; Seek!</item>
+        <item quantity="other">🔥 %d-day color walk streak on Hue &amp; Seek!</item>
+    </plurals>
+    <plurals name="stats_share_photos">
+        <item quantity="one">%d photo and counting.</item>
+        <item quantity="other">%d photos and counting.</item>
+    </plurals>
+    <string name="stats_share_chooser">Share your streak</string>
+    <string name="stats_share_button">Share my streak</string>
+    <string name="stats_prev_month">Previous month</string>
+    <string name="stats_next_month">Next month</string>
+    <string name="stats_day_captured">%1$s, %2$s captured</string>
+    <plurals name="stats_day_captured_many">
+        <item quantity="one">%1$s, %2$s captured, %3$d photo</item>
+        <item quantity="other">%1$s, %2$s captured, %3$d photos</item>
+    </plurals>
+    <string name="stats_dominant">Dominant</string>
+
+    <!-- Permission rationale -->
+    <string name="perm_camera_title">Camera</string>
+    <string name="perm_camera_reason">Captures your daily color walk photo and validates it against today\'s color challenge.</string>
+    <string name="perm_location_title">Location</string>
+    <string name="perm_location_reason">Tags each photo with where you found the color, building a map of your walks. Skipped automatically if you decline.</string>
+    <string name="perm_notifications_title">Notifications</string>
+    <string name="perm_notifications_reason">Sends a daily reminder to complete your walk before midnight so you never lose your streak.</string>
+    <string name="perm_photos_title">Photo Library</string>
+    <string name="perm_photos_reason">Lets you import a photo you already took instead of capturing a new one from the camera.</string>
+    <string name="perm_heading">Before we begin</string>
+    <string name="perm_intro">Hue &amp; Seek needs a few permissions to give you the full experience. Here\'s exactly what we use each one for.</string>
+    <string name="perm_continue">Continue</string>
+    <string name="perm_required">Required</string>
+    <string name="perm_optional">Optional</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_1_title">A new color, every day</string>
+    <string name="onboarding_1_body">Each day Hue &amp; Seek gives you one color to hunt down in the real world. Step outside and find it.</string>
+    <string name="onboarding_2_title">Isolate the color</string>
+    <string name="onboarding_2_body">Drag today\'s color into the ring — that\'s the whole game. Out in the world, you\'ll frame it with your camera instead.</string>
+    <string name="onboarding_3_title">Capture &amp; validate</string>
+    <string name="onboarding_3_body">Take a photo where today\'s color stars in the frame. The app checks automatically — no cheating!</string>
+    <string name="onboarding_4_title">Build your streak</string>
+    <string name="onboarding_4_body">One photo per day keeps your streak alive. Miss a day and it resets to zero. How far can you go?</string>
+    <string name="onboarding_get_started">Get Started</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_caught">That\'s the hunt!</string>
+
+    <!-- Your Walks feed -->
+    <string name="newsfeed_title">Your Walks</string>
+    <string name="newsfeed_swipe_to_close">Swipe down to close</string>
+    <string name="newsfeed_empty_title">No walks yet</string>
+    <string name="newsfeed_empty_body">Go on a color walk to fill your journal</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_reminder_name">Daily Streak Reminder</string>
+    <string name="notif_channel_reminder_desc">Reminds you to complete today\'s color walk at your chosen morning and evening times</string>
+    <string name="notif_channel_last_chance_name">End-of-Day Gentle Nudge</string>
+    <string name="notif_channel_last_chance_desc">A silent last-call reminder on days both regular reminders were missed</string>
+    <plurals name="notif_nudge_dont_break">
+        <item quantity="one">Don\'t break your %d day streak! 🔥</item>
+        <item quantity="other">Don\'t break your %d day streak! 🔥</item>
+    </plurals>
+    <plurals name="notif_nudge_strong">
+        <item quantity="one">%d day strong — keep it going!</item>
+        <item quantity="other">%d days strong — keep it going!</item>
+    </plurals>
+    <string name="notif_nudge_started_yesterday">You started yesterday — don\'t stop now!</string>
+    <string name="notif_nudge_start_today">Start your streak today!</string>
+    <string name="notif_reminder_title">Find %1$s today 🎨</string>
+    <string name="notif_reminder_body">Today\'s color is %1$s. %2$s Head outside and snap it before the day ends!</string>
+    <plurals name="notif_last_chance_body_streak">
+        <item quantity="one">A gentle nudge — one %1$s photo before midnight keeps your %2$d-day streak going. Still time.</item>
+        <item quantity="other">A gentle nudge — one %1$s photo before midnight keeps your %2$d-day streak going. Still time.</item>
+    </plurals>
+    <string name="notif_last_chance_body">A gentle nudge — today\'s %1$s walk is still open. No pressure, just a little time left.</string>
+    <string name="notif_last_chance_title">Today\'s %1$s is still out there</string>
 </resources>

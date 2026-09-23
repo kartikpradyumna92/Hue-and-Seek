@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -45,8 +44,7 @@ class HomeViewModel @Inject constructor(
     val state: StateFlow<HomeUiState> = _state
 
     // Three most recent photos — drives the newsfeed peek strip on Home.
-    val recentPhotos: StateFlow<List<PhotoEntity>> = repo.getAllPhotos()
-        .map { it.take(3) }
+    val recentPhotos: StateFlow<List<PhotoEntity>> = repo.getRecentPhotos(3)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var loadJob: Job? = null
@@ -56,8 +54,22 @@ class HomeViewModel @Inject constructor(
     @Volatile
     private var syncCompleted = false
 
+    // BUG-038: set when the USER adds a photo (capture/import). A capture made while
+    // the startup sync is still running arrives as a "fromSync" DB emission and never
+    // celebrated; and whichever of that emission / this signal loads second saw
+    // capturedToday already true (no false→true transition). A pending user capture
+    // celebrates regardless of either — last_celebration_day still limits it to once.
+    @Volatile
+    private var userCapturePending = false
+
     init {
         load()
+        viewModelScope.launch {
+            repo.userAddedPhotos.collect {
+                userCapturePending = true
+                load()
+            }
+        }
         viewModelScope.launch {
             try {
                 repo.syncGalleryWithDatabase()
@@ -72,12 +84,11 @@ class HomeViewModel @Inject constructor(
         // signal that a photo was captured. Room re-emits on EVERY row update though
         // (note saves, geocode backfill), and load() re-reads all photo dates — so
         // only react when the photo set itself changes: the count (capture/delete)
-        // or the newest timestamp (capture). The list is ordered dateTaken DESC, so
-        // first() is the max. Skip the initial emission (startup state, already
-        // covered by load() above). (M-2)
+        // or the newest timestamp (capture). Skip the initial emission (startup
+        // state, already covered by load() above). (M-2)
         viewModelScope.launch {
-            repo.getAllPhotos()
-                .map { photos -> photos.size to (photos.firstOrNull()?.dateTaken ?: 0L) }
+            // BUG-041: a COUNT/MAX aggregate, not the whole table, on every row write.
+            repo.observePhotoSetSignature()
                 .distinctUntilChanged()
                 .drop(1)
                 .collect {
@@ -101,13 +112,21 @@ class HomeViewModel @Inject constructor(
             val lastCelebDay = prefs.getInt("last_celebration_day", -1)
 
             // Celebrate when capturedToday transitions false→true, once per calendar day.
-            // fromSync loads never trigger confetti (reinstall recovery shouldn't celebrate).
+            // fromSync loads never trigger confetti (reinstall recovery shouldn't celebrate)
+            // — unless the user themselves just added a photo (see userCapturePending).
+            val userCapture = userCapturePending
+            val earned = if (userCapture) capturedToday else !fromSync && capturedToday && !prevCaptured
             val celebration = when {
-                !fromSync && capturedToday && !prevCaptured && lastCelebDay != todayIndex ->
+                earned && lastCelebDay != todayIndex -> {
+                    // Claim the day now, not when the confetti ends: a second load
+                    // racing this one must not queue a second celebration (BUG-038).
+                    prefs.edit().putInt("last_celebration_day", todayIndex).apply()
                     if (streak in MILESTONE_STREAKS) CelebrationState.Milestone(streak)
                     else CelebrationState.Daily
+                }
                 else -> null
             }
+            if (userCapture && capturedToday) userCapturePending = false
 
             _state.value = HomeUiState(
                 colorOfDay = color,

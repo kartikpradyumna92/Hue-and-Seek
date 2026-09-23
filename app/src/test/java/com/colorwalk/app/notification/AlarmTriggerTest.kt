@@ -1,5 +1,6 @@
 package com.colorwalk.app.notification
 
+import com.colorwalk.app.domain.StreakCalculator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,6 +45,49 @@ class AlarmTriggerTest {
         val trigger = AlarmScheduler.nextTriggerMillis(hour = 10, minute = 30, nowMillis = now)
         assertTrue("An alarm 'now' must roll to tomorrow, never fire immediately", trigger > now)
         assertEquals(10 to 30, hourMinuteOf(trigger))
+    }
+
+    // ── one fire per slot per day (BUG-004) ──────────────────────────────────
+
+    private fun dayOf(millis: Long) = StreakCalculator.epochMillisToDayIndex(millis)
+
+    @Test
+    fun firedEarlyInsideTheWindow_rearmsForTomorrowNotTodaysSlot() {
+        // Inexact window opened at 20:53; the alarm fired at 20:55 for the 21:00 slot.
+        val now = at(20, 55)
+        val trigger = AlarmScheduler.nextTriggerMillis(
+            hour = 21, minute = 0, nowMillis = now, lastFiredDayIndex = dayOf(now)
+        )
+        assertEquals("Must skip today's already-fired slot", dayOf(now) + 1, dayOf(trigger))
+        assertEquals(21 to 0, hourMinuteOf(trigger))
+    }
+
+    @Test
+    fun appLaunchAfterTodaysFire_doesNotRearmToday() {
+        // scheduleBoth() on app launch at 20:56, after the 21:00 slot fired early.
+        val now = at(20, 56)
+        val trigger = AlarmScheduler.nextTriggerMillis(
+            hour = 21, minute = 0, nowMillis = now, lastFiredDayIndex = dayOf(at(21, 0))
+        )
+        assertEquals(dayOf(now) + 1, dayOf(trigger))
+    }
+
+    @Test
+    fun firedYesterday_todaysSlotStillArms() {
+        val now = at(8, 0)
+        val trigger = AlarmScheduler.nextTriggerMillis(
+            hour = 21, minute = 0, nowMillis = now, lastFiredDayIndex = dayOf(now) - 1
+        )
+        assertEquals(at(21, 0), trigger)
+    }
+
+    @Test
+    fun noFireHistory_behavesAsBefore() {
+        val now = at(8, 0)
+        assertEquals(
+            AlarmScheduler.nextTriggerMillis(hour = 21, minute = 0, nowMillis = now),
+            AlarmScheduler.nextTriggerMillis(hour = 21, minute = 0, nowMillis = now, lastFiredDayIndex = null)
+        )
     }
 
     @Test

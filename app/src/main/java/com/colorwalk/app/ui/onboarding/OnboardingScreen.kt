@@ -45,10 +45,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.colorwalk.app.domain.WALK_COLORS
 import com.colorwalk.app.domain.colorForDay
+import com.colorwalk.app.ui.components.FitToHeight
 import com.colorwalk.app.ui.home.SwipePhysics
 import com.colorwalk.app.ui.theme.DayTheme
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.compose.ui.res.stringResource
+import com.colorwalk.app.R
+import androidx.annotation.StringRes
 
 // Mirrors HomeHubScreen's COMMIT_SPRING/RETURN_SPRING exactly, so onboarding's swipe
 // is not just "similar" but the identical physical feel as the rest of the app: firm
@@ -57,8 +61,8 @@ private val ONBOARDING_COMMIT_SPRING: AnimationSpec<Float> = spring(dampingRatio
 private val ONBOARDING_RETURN_SPRING: AnimationSpec<Float> = spring(dampingRatio = 0.72f, stiffness = 300f)
 
 private data class Page(
-    val title: String,
-    val body: String,
+    @StringRes val title: Int,
+    @StringRes val body: Int,
     val icon: ImageVector? = null,
     val iconTint: Color = Color.White,
     val solidCircle: Boolean = false,
@@ -72,24 +76,24 @@ fun OnboardingScreen(onFinish: () -> Unit) {
     val pages = remember {
         listOf(
             Page(
-                title = "A new color, every day",
-                body = "Each day Hue & Seek gives you one color to hunt down in the real world. Step outside and find it.",
+                title = R.string.onboarding_1_title,
+                body = R.string.onboarding_1_body,
                 solidCircle = true
             ),
             Page(
-                title = "Isolate the color",
-                body = "Drag today's color into the ring — that's the whole game. Out in the world, you'll frame it with your camera instead.",
+                title = R.string.onboarding_2_title,
+                body = R.string.onboarding_2_body,
                 interactive = true
             ),
             Page(
-                title = "Capture & validate",
-                body = "Take a photo where today's color stars in the frame. The app checks automatically — no cheating!",
+                title = R.string.onboarding_3_title,
+                body = R.string.onboarding_3_body,
                 icon = Icons.Default.CameraAlt,
                 iconTint = accent
             ),
             Page(
-                title = "Build your streak",
-                body = "One photo per day keeps your streak alive. Miss a day and it resets to zero. How far can you go?",
+                title = R.string.onboarding_4_title,
+                body = R.string.onboarding_4_body,
                 icon = Icons.Default.LocalFireDepartment,
                 iconTint = Color(0xFFFF6D00)
             )
@@ -139,7 +143,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
         // Same per-gesture rule as the hub, via the shared session (I-2): at most one
         // page of travel from wherever THIS gesture started, intersected with the
         // strip's ends.
-        val session = SwipePhysics.OnePageDragSession()
+        val session = SwipePhysics.OnePageDragSession(SwipePhysics.flickVelocityPx(density))
         detectHorizontalDragGestures(
             onDragStart = { session.begin(dragX.value, viewportW, stripMin, 0f) },
             onDragEnd = {
@@ -177,7 +181,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             ) {
                 if (!isLast) {
                     TextButton(onClick = onFinish) {
-                        Text("Skip", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f), fontSize = 14.sp)
+                        Text(stringResource(R.string.action_skip), color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f), fontSize = 14.sp)
                     }
                 }
             }
@@ -189,10 +193,14 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             // clipped so a neighbor peeking during the elastic snap-back stays a
             // clean pager peek. Only the current page and its real neighbors are
             // composed; each sits at its fixed absolute slot.
+            // BUG-013: up to 430dp, but it yields height (rather than pushing the Next /
+            // Get Started button off-screen) on short windows or at large font scales;
+            // each page's content then scales to fit (FitToHeight below).
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(430.dp)
+                    .weight(8f, fill = false)
+                    .heightIn(max = 430.dp)
                     .onSizeChanged { viewportW = it.width }
                     .clipToBounds()
             ) {
@@ -237,12 +245,12 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 32.dp)
-                    .height(56.dp),
+                    .heightIn(min = 56.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = accent)
             ) {
                 Text(
-                    if (isLast) "Get Started" else "Next",
+                    stringResource(if (isLast) R.string.onboarding_get_started else R.string.onboarding_next),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     // WCAG-derived, not hardcoded white: white on a Yellow/Orange
@@ -258,34 +266,40 @@ fun OnboardingScreen(onFinish: () -> Unit) {
 
 @Composable
 private fun OnboardingPageContent(page: Page, accent: Color, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        if (page.interactive) {
-            ColorCatchPlayground(accent = accent)
-            Spacer(Modifier.height(20.dp))
-        } else {
-            PageCircle(accent = accent, page = page, size = 164.dp)
-            Spacer(Modifier.height(48.dp))
+    // Centered at natural size; scaled down to fit when the page strip is shorter
+    // than the content (BUG-013) instead of being clipped.
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        FitToHeight {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                if (page.interactive) {
+                    ColorCatchPlayground(accent = accent)
+                    Spacer(Modifier.height(20.dp))
+                } else {
+                    PageCircle(accent = accent, page = page, size = 164.dp)
+                    Spacer(Modifier.height(48.dp))
+                }
+                Text(
+                    stringResource(page.title),
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 32.sp
+                )
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    stringResource(page.body),
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
+                    textAlign = TextAlign.Center,
+                    lineHeight = 23.sp
+                )
+            }
         }
-        Text(
-            page.title,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.ExtraBold,
-            color = MaterialTheme.colorScheme.onBackground,
-            textAlign = TextAlign.Center,
-            lineHeight = 32.sp
-        )
-        Spacer(Modifier.height(14.dp))
-        Text(
-            page.body,
-            fontSize = 15.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
-            textAlign = TextAlign.Center,
-            lineHeight = 23.sp
-        )
     }
 }
 
@@ -423,7 +437,7 @@ private fun ColorCatchPlayground(accent: Color, modifier: Modifier = Modifier) {
 
         if (caught) {
             Text(
-                "That's the hunt!",
+                stringResource(R.string.onboarding_caught),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = accent,

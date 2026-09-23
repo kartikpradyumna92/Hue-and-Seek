@@ -188,4 +188,86 @@ class ExifIntegrityTest {
         )
         assertEquals(ExifIntegrity.Verdict.Ok, verdict)
     }
+
+    // ── BUG-017: genuine photos the old single-source rules rejected ─────────
+
+    @Test
+    fun evaluate_oemShiftedDateTaken_isOk_whenExifOriginalIsSane() {
+        // OEM stored local-naive millis: DATE_TAKEN looks 5.5 h in the future (UTC+5:30),
+        // but EXIF DateTimeOriginal/Digitized agree with each other and with the clock.
+        val real = NOON - 20 * MIN
+        val verdict = ExifIntegrity.evaluate(
+            captureMillis = real + 5 * HOUR + 30 * MIN,
+            digitizedMillis = real + 600,
+            fileModifiedMillis = real + 2_000,
+            nowMillis = NOON,
+            exifOriginalMillis = real
+        )
+        assertEquals(ExifIntegrity.Verdict.Ok, verdict)
+    }
+
+    @Test
+    fun evaluate_travelWithoutOffsetTag_isOk_whenDateTakenIsSane() {
+        // Flew two zones west: zone-less EXIF parses 2 h "later" than it really was
+        // (looks future), but MediaStore's DATE_TAKEN has the true instant.
+        val real = NOON - 30 * MIN
+        val verdict = ExifIntegrity.evaluate(
+            captureMillis = real,
+            digitizedMillis = real + 2 * HOUR + 400,
+            fileModifiedMillis = real + 1_000,
+            nowMillis = NOON,
+            exifOriginalMillis = real + 2 * HOUR
+        )
+        assertEquals(ExifIntegrity.Verdict.Ok, verdict)
+    }
+
+    @Test
+    fun evaluate_digitizedOffByAHalfHourZone_isOk() {
+        val capture = NOON - HOUR
+        val verdict = ExifIntegrity.evaluate(
+            captureMillis = capture,
+            digitizedMillis = capture - 5 * HOUR - 30 * MIN + 1_000,
+            fileModifiedMillis = 0,
+            nowMillis = NOON
+        )
+        assertEquals(ExifIntegrity.Verdict.Ok, verdict)
+    }
+
+    @Test
+    fun evaluate_futureInEverySource_isStillTampered() {
+        // An EXIF editor pushed the date forward — MediaStore derived DATE_TAKEN from
+        // it, so both sources are in the future.
+        val verdict = ExifIntegrity.evaluate(
+            captureMillis = NOON + 3 * HOUR,
+            digitizedMillis = null,
+            fileModifiedMillis = 0,
+            nowMillis = NOON,
+            exifOriginalMillis = NOON + 3 * HOUR
+        )
+        assertTrue(verdict is ExifIntegrity.Verdict.Tampered)
+    }
+
+    @Test
+    fun evaluate_digitizedDaysApart_isStillTampered_evenWithTwoSources() {
+        val verdict = ExifIntegrity.evaluate(
+            captureMillis = NOON - HOUR,
+            digitizedMillis = NOON - 3 * 24 * HOUR,
+            fileModifiedMillis = 0,
+            nowMillis = NOON,
+            exifOriginalMillis = NOON - HOUR
+        )
+        assertTrue(verdict is ExifIntegrity.Verdict.Tampered)
+    }
+
+    @Test
+    fun evaluate_digitizedOffByAnOddAmount_isStillTampered() {
+        // 3 h 07 min is not timezone-shaped — an edit, not an offset.
+        val verdict = ExifIntegrity.evaluate(
+            captureMillis = NOON - HOUR,
+            digitizedMillis = NOON - 4 * HOUR - 7 * MIN,
+            fileModifiedMillis = 0,
+            nowMillis = NOON
+        )
+        assertTrue(verdict is ExifIntegrity.Verdict.Tampered)
+    }
 }

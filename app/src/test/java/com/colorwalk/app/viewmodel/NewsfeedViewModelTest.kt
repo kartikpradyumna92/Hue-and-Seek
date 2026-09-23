@@ -40,6 +40,7 @@ class NewsfeedViewModelTest {
         colorName = colorName,
         colorHex = "#E53935",
         dateTaken = dateTaken,
+        dayIndex = com.colorwalk.app.domain.StreakCalculator.epochMillisToDayIndex(dateTaken),
         latitude = null,
         longitude = null,
         locationName = null,

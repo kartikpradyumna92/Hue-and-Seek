@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
+import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,6 +38,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
@@ -67,22 +70,31 @@ import androidx.lifecycle.LifecycleEventObserver
 import android.util.Size
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
+import com.colorwalk.app.data.repository.NormalizedCrop
 import com.colorwalk.app.domain.ColorValidator
 import com.colorwalk.app.ui.theme.DayTheme
+import com.colorwalk.app.ui.theme.ForceLightSystemBarIcons
 import com.colorwalk.app.viewmodel.CameraViewModel
 import com.colorwalk.app.viewmodel.CaptureState
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import com.google.accompanist.permissions.shouldShowRationale
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collectLatest
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
+import androidx.compose.ui.res.stringResource
+import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
+import android.content.Context
+import com.colorwalk.app.ui.components.localizedDateFormat
 
 private data class ZoomLevel(val label: String, val ratio: Float)
 
@@ -105,6 +117,14 @@ private val ZOOM_LEVELS = listOf(
     ZoomLevel("20×", 20f),
 )
 
+/** Set whenever the camera permission dialog is requested (here or at onboarding). */
+const val KEY_CAMERA_PERMISSION_REQUESTED = "camera_permission_requested"
+
+// Process-lifetime executor for takePicture callbacks. A capture must be able to
+// report back after the Camera pane has left composition (swipe-away, back,
+// rotation), so its callback can't run on the pane-scoped analysis executor.
+private val CaptureCallbackExecutor: Executor = Executors.newSingleThreadExecutor()
+
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun CameraScreen(
@@ -112,16 +132,28 @@ fun CameraScreen(
     viewModel: CameraViewModel = hiltViewModel()
 ) {
     val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
+    // Black viewfinder: dark status/nav icons would vanish on a light app theme (BUG-012).
+    ForceLightSystemBarIcons()
 
+    val context = LocalContext.current
     if (!cameraPermission.status.isGranted) {
+        // BUG-049: after "Don't allow" twice (or "don't ask again"), the system shows no
+        // dialog at all, so "Grant Access" silently did nothing. Asked before + no
+        // rationale = permanently denied → only Settings can fix it.
+        val prefs = remember { context.getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE) }
+        val permanentlyDenied = prefs.getBoolean(KEY_CAMERA_PERMISSION_REQUESTED, false) &&
+            !cameraPermission.status.shouldShowRationale
         CameraPermissionDenied(
-            onRequestPermission = { cameraPermission.launchPermissionRequest() },
+            permanentlyDenied = permanentlyDenied,
+            onRequestPermission = {
+                prefs.edit().putBoolean(KEY_CAMERA_PERMISSION_REQUESTED, true).apply()
+                cameraPermission.launchPermissionRequest()
+            },
             onBack = onBack
         )
         return
     }
 
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val captureState by viewModel.captureState.collectAsState()
     val targetColor by viewModel.targetColor.collectAsState()
@@ -154,18 +186,28 @@ fun CameraScreen(
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
-    var useFrontCamera by remember { mutableStateOf(false) }
+    // BUG-043: lens and zoom live in the ViewModel, so a teardown (hub nudge) keeps them.
+    var useFrontCamera by viewModel::useFrontCamera
     // requestedZoom: the level the user tapped; activeZoom: the ratio the camera
     // actually applied after clamping to the device's supported range. Only
     // activeZoom is used for chip highlighting so the UI always reflects reality.
-    var requestedZoom by remember { mutableStateOf(1f) }
+    var requestedZoom by viewModel::requestedZoom
     var activeZoom by remember { mutableStateOf(1f) }
+    // BUG-016: a failed bind / camera error is shown with a retry, not a black void.
+    var cameraError by remember { mutableStateOf<String?>(null) }
+    var bindAttempt by remember { mutableIntStateOf(0) }
+    var hasFrontCamera by remember { mutableStateOf(true) }
     var minZoom by remember { mutableStateOf(1f) }
     var maxZoom by remember { mutableStateOf(20f) }
     val supportedLevels = remember(minZoom, maxZoom) {
         ZOOM_LEVELS.filter { it.ratio in minZoom..maxZoom }
     }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    // BUG-022: the first bind completes asynchronously (ProcessCameraProvider init).
+    // Leaving before it lands found cameraProvider == null below, unbound nothing, and
+    // the late bind then attached the camera to the ACTIVITY lifecycle with no pane on
+    // screen — privacy indicator lit, battery draining. The bind checks this first.
+    val paneActive = remember { AtomicBoolean(true) }
 
     // The use cases are bound to the ACTIVITY lifecycle, which stays RESUMED for the
     // whole session — leaving this pane does NOT stop the camera on its own. Unbind
@@ -175,6 +217,7 @@ fun CameraScreen(
     // time the user is on Home/Gallery/Settings/Newsfeed (H-1).
     DisposableEffect(Unit) {
         onDispose {
+            paneActive.set(false)
             cameraProvider?.unbindAll()
             cameraExecutor.shutdown()
             // Leaving the pane with the note prompt still open counts as skipping it —
@@ -230,7 +273,8 @@ fun CameraScreen(
         // key(cameraSelector) destroys and recreates the AndroidView only when the user
         // flips between front/back — not on every recomposition (zoom taps, state changes, etc.).
         // No update block needed: factory handles the bind, LaunchedEffect handles zoom.
-        key(cameraSelector) {
+        // bindAttempt: "Retry" after a camera error recreates the view and rebinds.
+        key(cameraSelector, bindAttempt) {
             AndroidView(
                 factory = { ctx ->
                     PreviewView(ctx).also { previewView ->
@@ -239,7 +283,20 @@ fun CameraScreen(
                         // ignores the pager's translation during a swipe, so the preview pixels
                         // visibly lag/tear away from the rest of the page mid-drag.
                         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                        bindCamera(ctx, lifecycleOwner, previewView, cameraSelector, liveAnalyzer, cameraExecutor) { cap, cam, provider ->
+                        cameraError = null
+                        bindCamera(
+                            ctx, lifecycleOwner, previewView, cameraSelector, liveAnalyzer,
+                            cameraExecutor, paneActive::get,
+                            onBindError = { e ->
+                                imageCapture = null
+                                cameraError = cameraErrorMessage(context, e)
+                            },
+                            onProvider = { provider ->
+                                hasFrontCamera = try {
+                                    provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)
+                                } catch (_: Exception) { false }
+                            }
+                        ) { cap, cam, provider ->
                             imageCapture = cap
                             camera = cam
                             cameraProvider = provider
@@ -252,6 +309,48 @@ fun CameraScreen(
                 },
                 modifier = Modifier.fillMaxSize()
             )
+        }
+
+        // BUG-016: a camera that errors AFTER binding (another app takes it, it's
+        // disabled by policy, a fatal HAL error) surfaces here too.
+        DisposableEffect(camera) {
+            val info = camera?.cameraInfo
+            val observer = androidx.lifecycle.Observer<CameraState> { state ->
+                val error = state.error
+                cameraError = when {
+                    error == null -> null
+                    // Recoverable errors CameraX retries itself — don't alarm the user.
+                    error.type == CameraState.ErrorType.RECOVERABLE -> null
+                    error.code == CameraState.ERROR_CAMERA_IN_USE ||
+                        error.code == CameraState.ERROR_MAX_CAMERAS_IN_USE ->
+                        context.getString(R.string.camera_error_in_use)
+                    error.code == CameraState.ERROR_CAMERA_DISABLED ->
+                        context.getString(R.string.camera_error_disabled)
+                    else -> context.getString(R.string.camera_error_stopped)
+                }
+            }
+            info?.cameraState?.observe(lifecycleOwner, observer)
+            onDispose { info?.cameraState?.removeObserver(observer) }
+        }
+
+        // BUG-015: CameraX only knows the DISPLAY rotation, and the activity is
+        // portrait-locked — so a photo held in landscape was saved with portrait EXIF
+        // and displayed sideways. Follow the physical orientation instead.
+        DisposableEffect(imageCapture) {
+            val capture = imageCapture
+            val listener = object : OrientationEventListener(context) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN || capture == null) return
+                    capture.targetRotation = when (orientation) {
+                        in 45 until 135 -> Surface.ROTATION_270
+                        in 135 until 225 -> Surface.ROTATION_180
+                        in 225 until 315 -> Surface.ROTATION_90
+                        else -> Surface.ROTATION_0
+                    }
+                }
+            }
+            if (capture != null) listener.enable()
+            onDispose { listener.disable() }
         }
 
         // Golden grid — rule-of-thirds lines plus dots on the five focal points the
@@ -329,7 +428,7 @@ fun CameraScreen(
                 onClick = onBack,
                 modifier = Modifier.clip(CircleShape).background(Color.Black.copy(alpha = 0.5f))
             ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = Color.White)
             }
             Spacer(Modifier.width(12.dp))
             Box(
@@ -347,7 +446,7 @@ fun CameraScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Find ${targetColor.name}",
+                        stringResource(R.string.home_find_color, colorDisplayName(targetColor.name)),
                         color = Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold
@@ -374,7 +473,10 @@ fun CameraScreen(
                     .background(Color.Black.copy(alpha = 0.45f))
                     .padding(horizontal = 12.dp, vertical = 6.dp)
                     .semantics(mergeDescendants = true) {
-                        contentDescription = "${(liveShare * 100).toInt()} percent of the frame is ${targetColor.name}"
+                        contentDescription = context.resources.getQuantityString(
+                            R.plurals.camera_live_share_desc, (liveShare * 100).toInt(), (liveShare * 100).toInt(),
+                            context.colorDisplayName(targetColor.name)
+                        )
                     }
             ) {
                 Box(
@@ -393,7 +495,7 @@ fun CameraScreen(
                 }
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "${(liveShare * 100).toInt()}%",
+                    stringResource(R.string.camera_percent, (liveShare * 100).toInt()),
                     color = Color.White.copy(alpha = 0.85f),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold
@@ -418,7 +520,10 @@ fun CameraScreen(
                                 else Color.Black.copy(alpha = 0.55f)
                             )
                             .semantics(mergeDescendants = true) {
-                                contentDescription = "${level.label} zoom" + if (isActive) ", selected" else ""
+                                contentDescription = context.getString(
+                                    if (isActive) R.string.zoom_level_desc_selected else R.string.zoom_level_desc,
+                                    level.label
+                                )
                             }
                     ) {
                         TextButton(
@@ -442,12 +547,15 @@ fun CameraScreen(
             }
 
             Text(
-                "or import from gallery",
+                stringResource(R.string.camera_or_import),
                 color = Color.White.copy(alpha = 0.4f),
                 fontSize = 11.sp,
                 modifier = Modifier.padding(bottom = 10.dp)
             )
 
+            // BUG-044: while a capture/import is being processed, a second import or a
+            // lens flip (which rebinds and aborts the capture) must not be possible.
+            val idle = captureState !is CaptureState.Processing
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(32.dp)
@@ -459,22 +567,31 @@ fun CameraScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
+                    enabled = idle,
                     modifier = Modifier
                         .size(52.dp)
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.5f))
+                        .alpha(if (idle) 1f else 0.4f)
                 ) {
-                    Icon(Icons.Default.PhotoLibrary, contentDescription = "Import", tint = Color.White, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = stringResource(R.string.camera_import), tint = Color.White, modifier = Modifier.size(24.dp))
                 }
 
                 // Shutter
-                if (captureState !is CaptureState.Processing) {
+                if (idle) {
+                    val bound = imageCapture != null
                     IconButton(
                         onClick = {
                             val capture = imageCapture ?: return@IconButton
+                            // Snapshot at the tap: the callback can land after the pane
+                            // (and this state) is gone.
+                            val mirror = useFrontCamera
                             viewModel.startCapture()
                             capture.takePicture(
-                                cameraExecutor,
+                                // NOT cameraExecutor: that one is shut down when the pane
+                                // leaves composition, which would strand the result and
+                                // leave the shutter stuck in Processing (BUG-001).
+                                CaptureCallbackExecutor,
                                 object : ImageCapture.OnImageCapturedCallback() {
                                     override fun onCaptureSuccess(proxy: ImageProxy) {
                                         // Hand the HAL's original JPEG bytes straight to the
@@ -486,24 +603,46 @@ fun CameraScreen(
                                         val buffer = proxy.planes[0].buffer
                                         val bytes = ByteArray(buffer.remaining())
                                         buffer.get(bytes)
+                                        // BUG-014: the viewport crop (what the preview showed),
+                                        // in the JPEG buffer's own orientation. The file is saved
+                                        // whole; only validation looks at this region.
+                                        val crop = proxy.cropRect.let {
+                                            normalizedCropOf(it.left, it.top, it.right, it.bottom, proxy.width, proxy.height)
+                                        }
                                         proxy.close()
                                         // Front captures arrive un-mirrored from the HAL; flag
                                         // them so the save mirrors the EXIF orientation and the
                                         // stored selfie matches what the preview showed (L-3).
-                                        viewModel.onPhotoCaptured(bytes, mirror = useFrontCamera)
+                                        viewModel.onPhotoCaptured(bytes, mirror = mirror, crop = crop)
                                     }
                                     override fun onError(e: ImageCaptureException) {
-                                        Log.e("CameraScreen", "Capture error", e)
-                                        viewModel.onCaptureError()
+                                        if (e.imageCaptureError == ImageCapture.ERROR_CAMERA_CLOSED) {
+                                            // Pane left mid-capture: unbindAll aborts the
+                                            // request. The user walked away — not an error.
+                                            viewModel.onCaptureAborted()
+                                        } else {
+                                            Log.e("CameraScreen", "Capture error", e)
+                                            viewModel.onCaptureError()
+                                        }
                                     }
                                 }
                             )
                         },
+                        // BUG-016: no silent dead shutter — disabled (and dimmed) until
+                        // the camera is actually bound.
+                        enabled = bound,
                         modifier = Modifier
                             .size(76.dp)
                             .clip(CircleShape)
                             .background(Color.White)
                             .border(5.dp, targetColor.composeColor, CircleShape)
+                            .alpha(if (bound) 1f else 0.5f)
+                            // BUG-023: the app's core action was announced as just "Button".
+                            .semantics {
+                                contentDescription = context.getString(
+                                    R.string.camera_shutter_desc, context.colorDisplayName(targetColor.name)
+                                )
+                            }
                     ) {
                         // Center dot in the target color — the shutter IS the mission
                         Box(
@@ -514,22 +653,81 @@ fun CameraScreen(
                         )
                     }
                 } else {
-                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(56.dp))
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        modifier = Modifier
+                            .size(56.dp)
+                            .semantics { contentDescription = context.getString(R.string.camera_checking) }
+                    )
                 }
 
-                // Flip
-                IconButton(
-                    onClick = {
-                        useFrontCamera = !useFrontCamera
-                        requestedZoom = 1f
-                        activeZoom = 1f
-                    },
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.5f))
+                // Flip — hidden on devices without a front camera (binding one failed
+                // silently before); a spacer keeps the shutter centered.
+                if (hasFrontCamera) {
+                    IconButton(
+                        onClick = {
+                            useFrontCamera = !useFrontCamera
+                            requestedZoom = 1f
+                            activeZoom = 1f
+                        },
+                        enabled = idle,
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .alpha(if (idle) 1f else 0.4f)
+                    ) {
+                        Icon(
+                            Icons.Default.FlipCameraAndroid,
+                            contentDescription = stringResource(
+                                if (useFrontCamera) R.string.camera_switch_back else R.string.camera_switch_front
+                            ),
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                } else {
+                    Spacer(Modifier.size(52.dp))
+                }
+            }
+        }
+
+        // BUG-016: camera unavailable — say why and offer a retry instead of a black
+        // preview with a dead shutter.
+        cameraError?.let { message ->
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1B22)),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 32.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Icon(Icons.Default.FlipCameraAndroid, contentDescription = "Flip", tint = Color.White, modifier = Modifier.size(26.dp))
+                    Icon(
+                        Icons.Default.ErrorOutline, contentDescription = null,
+                        tint = Color(0xFFFF9800), modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(stringResource(R.string.camera_unavailable), style = MaterialTheme.typography.titleLarge, color = Color.White)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.75f),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedButton(onClick = {
+                        // A missing lens: fall back to the back camera before retrying.
+                        if (useFrontCamera && !hasFrontCamera) useFrontCamera = false
+                        cameraError = null
+                        bindAttempt++
+                    }) {
+                        Text(stringResource(R.string.action_try_again), color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    }
                 }
             }
         }
@@ -548,7 +746,10 @@ fun CameraScreen(
                 },
                 onSave = { note ->
                     viewModel.saveNoteForPhoto(awaitingNote.photoId, note, onDone = onBack)
-                }
+                },
+                // BUG-048: mirrored to the ViewModel so leaving the pane with a typed
+                // note saves it instead of silently discarding it.
+                onDraftChange = viewModel::onNoteDraftChanged
             )
         }
 
@@ -587,10 +788,12 @@ fun CameraScreen(
 private fun NotePromptCard(
     state: CaptureState.AwaitingNote,
     onSkip: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String) -> Unit,
+    onDraftChange: (String) -> Unit
 ) {
     val accentColor = parseResultHex(state.dominantHex)
     var noteText by remember { mutableStateOf("") }
+    LaunchedEffect(noteText) { onDraftChange(noteText) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
@@ -626,7 +829,7 @@ private fun NotePromptCard(
                         modifier = Modifier.size(22.dp)
                     )
                     Text(
-                        "Color Match!",
+                        stringResource(R.string.camera_color_match),
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
@@ -642,7 +845,7 @@ private fun NotePromptCard(
                 Spacer(Modifier.height(16.dp))
 
                 Text(
-                    "Add a note to this photo",
+                    stringResource(R.string.camera_note_title),
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 14.sp
                 )
@@ -677,7 +880,7 @@ private fun NotePromptCard(
                         ) {
                             if (noteText.isEmpty()) {
                                 Text(
-                                    "What did you find? Where was it?",
+                                    stringResource(R.string.camera_note_hint),
                                     color = Color.White.copy(alpha = 0.3f),
                                     fontSize = 15.sp,
                                     fontStyle = FontStyle.Italic
@@ -702,7 +905,7 @@ private fun NotePromptCard(
                             1.dp, Color.White.copy(alpha = 0.25f)
                         )
                     ) {
-                        Text("Skip", color = Color.White.copy(alpha = 0.6f), fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.action_skip), color = Color.White.copy(alpha = 0.6f), fontWeight = FontWeight.SemiBold)
                     }
                     Button(
                         onClick = {
@@ -714,7 +917,7 @@ private fun NotePromptCard(
                         colors = ButtonDefaults.buttonColors(containerColor = accentColor),
                         enabled = noteText.isNotBlank()
                     ) {
-                        Text("Save", fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.action_save), fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -729,11 +932,24 @@ private fun bindCamera(
     cameraSelector: CameraSelector,
     analyzer: ImageAnalysis.Analyzer,
     analysisExecutor: Executor,
+    isPaneActive: () -> Boolean,
+    onBindError: (Exception) -> Unit,
+    onProvider: (ProcessCameraProvider) -> Unit,
     onBound: (ImageCapture, Camera, ProcessCameraProvider) -> Unit
 ) {
     val future = ProcessCameraProvider.getInstance(context)
     future.addListener({
-        val provider = future.get()
+        // Main-thread listener, same thread as the pane's onDispose: if the pane is
+        // gone, it already ran — binding now would orphan the camera (BUG-022).
+        if (!isPaneActive()) return@addListener
+        val provider = try {
+            future.get()
+        } catch (e: Exception) {
+            Log.e("CameraScreen", "Camera provider unavailable", e)
+            onBindError(e)
+            return@addListener
+        }
+        onProvider(provider)
         val preview = Preview.Builder().build().also {
             it.setSurfaceProvider(previewView.surfaceProvider)
         }
@@ -757,16 +973,56 @@ private fun bindCamera(
             .also { it.setAnalyzer(analysisExecutor, analyzer) }
         try {
             provider.unbindAll()
-            val cam = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, capture, analysis)
+            // BUG-014: bind all three use cases to the preview's viewport, so capture
+            // and analysis report the same crop the user sees (FILL_CENTER on a tall
+            // screen shows only the middle of the 4:3 sensor image). Before layout the
+            // viewport is null — fall back to the full frame rather than not binding.
+            val viewPort = previewView.viewPort
+            val cam = if (viewPort != null) {
+                val group = UseCaseGroup.Builder()
+                    .setViewPort(viewPort)
+                    .addUseCase(preview)
+                    .addUseCase(capture)
+                    .addUseCase(analysis)
+                    .build()
+                provider.bindToLifecycle(lifecycleOwner, cameraSelector, group)
+            } else {
+                provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, capture, analysis)
+            }
             onBound(capture, cam, provider)
         } catch (e: Exception) {
+            // e.g. no front camera, or the camera is held by another app.
             Log.e("CameraScreen", "Bind failed", e)
+            onBindError(e)
         }
     }, ContextCompat.getMainExecutor(context))
 }
 
+/**
+ * [left]..[bottom] (a capture's cropRect, px) as fractions of a [width]×[height]
+ * image — or null when it covers the whole frame or is unusable, so validation just
+ * uses the full image (BUG-014). Pure: JVM-tested.
+ */
+internal fun normalizedCropOf(left: Int, top: Int, right: Int, bottom: Int, width: Int, height: Int): NormalizedCrop? {
+    if (width <= 0 || height <= 0) return null
+    val l = left.coerceIn(0, width); val t = top.coerceIn(0, height)
+    val r = right.coerceIn(0, width); val b = bottom.coerceIn(0, height)
+    if (r - l <= 0 || b - t <= 0) return null
+    if (l == 0 && t == 0 && r == width && b == height) return null
+    return NormalizedCrop(
+        l.toFloat() / width, t.toFloat() / height, r.toFloat() / width, b.toFloat() / height
+    )
+}
+
+/** User-facing text for a failed camera bind (BUG-016). */
+private fun cameraErrorMessage(context: Context, e: Exception): String = when (e) {
+    is IllegalArgumentException -> context.getString(R.string.camera_error_no_lens)
+    else -> context.getString(R.string.camera_error_bind)
+}
+
 @Composable
 private fun CameraPermissionDenied(
+    permanentlyDenied: Boolean,
     onRequestPermission: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -784,7 +1040,7 @@ private fun CameraPermissionDenied(
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
         ) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back), tint = MaterialTheme.colorScheme.onBackground)
         }
 
         Column(
@@ -812,7 +1068,7 @@ private fun CameraPermissionDenied(
             Spacer(Modifier.height(28.dp))
 
             Text(
-                "Camera access required",
+                stringResource(R.string.camera_permission_title),
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
@@ -822,7 +1078,10 @@ private fun CameraPermissionDenied(
             Spacer(Modifier.height(12.dp))
 
             Text(
-                "Hue & Seek needs camera access to capture your daily color walk photos. Your photos are saved only to your device.",
+                stringResource(
+                    if (permanentlyDenied) R.string.camera_permission_denied_body
+                    else R.string.camera_permission_body
+                ),
                 fontSize = 14.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 textAlign = TextAlign.Center,
@@ -831,28 +1090,40 @@ private fun CameraPermissionDenied(
 
             Spacer(Modifier.height(36.dp))
 
-            Button(
-                onClick = onRequestPermission,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Text("Grant Access", fontWeight = FontWeight.Bold)
+            val openSettings = {
+                context.startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
+                    }
+                )
             }
+            if (permanentlyDenied) {
+                // The system won't show a dialog any more — Settings is the only way.
+                Button(
+                    onClick = openSettings,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(stringResource(R.string.action_open_settings), fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Button(
+                    onClick = onRequestPermission,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(stringResource(R.string.camera_grant_access), fontWeight = FontWeight.Bold)
+                }
 
-            Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(12.dp))
 
-            OutlinedButton(
-                onClick = {
-                    context.startActivity(
-                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.fromParts("package", context.packageName, null)
-                        }
-                    )
-                },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Text("Open Settings", color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold)
+                OutlinedButton(
+                    onClick = openSettings,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(stringResource(R.string.action_open_settings), color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
@@ -867,6 +1138,7 @@ private fun ResultCard(
 ) {
     val targetSwatch = com.colorwalk.app.domain.WALK_COLORS
         .firstOrNull { it.name == targetColorName }?.composeColor ?: Color.Gray
+    val targetLabel = colorDisplayName(targetColorName)
 
     Card(
         shape = RoundedCornerShape(28.dp),
@@ -887,7 +1159,10 @@ private fun ResultCard(
                         ?: Color(0xFF9E9E9E) // neutral tones
 
                     Text(
-                        if (targetLeads) "More $targetColorName Needed" else "$targetColorName Isn't Dominant",
+                        stringResource(
+                            if (targetLeads) R.string.camera_fail_more_needed else R.string.camera_fail_not_dominant,
+                            targetLabel
+                        ),
                         style = MaterialTheme.typography.headlineSmall,
                         color = Color.White,
                         textAlign = TextAlign.Center
@@ -895,9 +1170,13 @@ private fun ResultCard(
                     Spacer(Modifier.height(14.dp))
                     // Target vs actual — show the user exactly what the camera saw
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        ResultSwatch(color = targetSwatch, label = targetColorName, sub = "Target")
+                        ResultSwatch(color = targetSwatch, label = targetLabel, sub = stringResource(R.string.camera_swatch_target))
                         Spacer(Modifier.width(28.dp))
-                        ResultSwatch(color = actualSwatch, label = state.actualDominant, sub = "Dominated")
+                        ResultSwatch(
+                            color = actualSwatch,
+                            label = colorDisplayName(state.actualDominant),
+                            sub = stringResource(R.string.camera_swatch_dominated)
+                        )
                     }
                     Spacer(Modifier.height(14.dp))
                     LinearProgressIndicator(
@@ -911,8 +1190,10 @@ private fun ResultCard(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "$pct% of the frame was $targetColorName — needs $needPct%+. " +
-                            if (targetLeads) "Get closer so it pops!" else "Make it the main subject.",
+                        stringResource(R.string.camera_fail_share, pct, targetLabel, needPct) + " " +
+                            stringResource(
+                                if (targetLeads) R.string.camera_fail_get_closer else R.string.camera_fail_main_subject
+                            ),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White.copy(alpha = 0.7f),
                         textAlign = TextAlign.Center
@@ -923,7 +1204,10 @@ private fun ResultCard(
                         val nearPct = (state.nearestColorShare * 100).toInt()
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Tip: ${nearPct}% ${state.nearestColorName} was found — try something more purely $targetColorName.",
+                            stringResource(
+                                R.string.camera_fail_tip, nearPct,
+                                colorDisplayName(state.nearestColorName), targetLabel
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.55f),
                             textAlign = TextAlign.Center
@@ -931,29 +1215,48 @@ private fun ResultCard(
                     }
                     Spacer(Modifier.height(16.dp))
                     OutlinedButton(onClick = onDismiss) {
-                        Text("Try Again", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Text(stringResource(R.string.action_try_again), color = Color.White, style = MaterialTheme.typography.labelLarge)
                     }
                 }
 
                 else -> {
                     val (title, subtitle) = when (state) {
                         is CaptureState.ImportWrongDay -> Pair(
-                            "Wrong Day",
-                            "Photo taken on ${SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(state.dateTaken))} — must be today."
+                            stringResource(R.string.camera_import_wrong_day),
+                            stringResource(
+                                R.string.camera_import_wrong_day_body,
+                                localizedDateFormat("MMMd").format(Date(state.dateTaken))
+                            )
                         )
                         CaptureState.ImportNoDate -> Pair(
-                            "No Date Info",
-                            "This photo has no date metadata — can't verify it was taken today."
+                            stringResource(R.string.camera_import_no_date),
+                            stringResource(R.string.camera_import_no_date_body)
                         )
                         CaptureState.ImportDuplicate -> Pair(
-                            "Already Imported",
-                            "This photo is already in your gallery."
+                            stringResource(R.string.camera_import_duplicate),
+                            stringResource(R.string.camera_import_duplicate_body)
                         )
                         CaptureState.ImportTampered -> Pair(
-                            "Can't Verify Photo",
-                            "This photo's date metadata looks edited or inconsistent — it can't be counted for today's walk."
+                            stringResource(R.string.camera_import_tampered),
+                            stringResource(R.string.camera_import_tampered_body)
                         )
-                        else -> Pair("Error", "Something went wrong.")
+                        // BUG-049: say what actually went wrong and what to do.
+                        CaptureState.CaptureFailed -> Pair(
+                            stringResource(R.string.camera_capture_failed),
+                            stringResource(R.string.camera_capture_failed_body)
+                        )
+                        CaptureState.StorageFull -> Pair(
+                            stringResource(R.string.camera_storage_full),
+                            stringResource(R.string.camera_storage_full_body)
+                        )
+                        CaptureState.ImportUnreadable -> Pair(
+                            stringResource(R.string.camera_import_unreadable),
+                            stringResource(R.string.camera_import_unreadable_body)
+                        )
+                        else -> Pair(
+                            stringResource(R.string.camera_save_failed),
+                            stringResource(R.string.camera_save_failed_body)
+                        )
                     }
                     Icon(
                         Icons.Default.ErrorOutline, contentDescription = null,
@@ -970,7 +1273,7 @@ private fun ResultCard(
                     )
                     Spacer(Modifier.height(16.dp))
                     OutlinedButton(onClick = onDismiss) {
-                        Text("Try Again", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Text(stringResource(R.string.action_try_again), color = Color.White, style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }

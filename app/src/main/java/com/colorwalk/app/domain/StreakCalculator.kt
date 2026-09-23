@@ -6,12 +6,26 @@ import java.util.Calendar
 
 object StreakCalculator {
 
-    /** Given epoch-millis timestamps of accepted photos, compute current streak in days. */
-    fun compute(photoTimestamps: List<Long>): Int {
-        if (photoTimestamps.isEmpty()) return 0
+    /**
+     * Given epoch-millis timestamps of accepted photos, compute current streak in
+     * days — each timestamp is bucketed into a calendar day using the device's
+     * CURRENT zone. Callers holding photos captured in the past (i.e. anything read
+     * back from the DB) must prefer [computeFromDayIndices] with each photo's day
+     * frozen at capture time instead — see PhotoEntity.dayIndex (T-1).
+     */
+    fun compute(photoTimestamps: List<Long>): Int =
+        computeFromDayIndices(photoTimestamps.map { epochMillisToDayIndex(it) })
 
-        val days = photoTimestamps
-            .map { epochMillisToDayIndex(it) }
+    /**
+     * Given each accepted photo's day index — frozen at capture/import time in the
+     * zone the user was in THEN (PhotoEntity.dayIndex) — compute the current streak
+     * in days. A device timezone change after capture (e.g. travel) must never
+     * reclassify which day an already-captured photo counted toward (T-1).
+     */
+    fun computeFromDayIndices(dayIndices: List<Int>): Int {
+        if (dayIndices.isEmpty()) return 0
+
+        val days = dayIndices
             .toSortedSet()
             .toList()
             .reversed() // most recent first

@@ -1,11 +1,14 @@
 package com.colorwalk.app.data.repository
 
+import android.Manifest
 import android.content.ContentUris
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import androidx.room.withTransaction
 import com.colorwalk.app.data.db.AppDatabase
@@ -20,6 +23,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Calendar
 import java.util.Locale
 
@@ -40,12 +45,22 @@ internal class GallerySynchronizer(
     private val context: Context,
     private val dao: PhotoDao,
     private val db: AppDatabase,
-    private val files: PhotoFileStore
+    private val files: PhotoFileStore,
+    private val mediaGallery: MediaStoreGallery = MediaStoreGallery(context)
 ) {
 
-    private companion object { const val TAG = "GallerySynchronizer" }
+    private companion object {
+        const val TAG = "GallerySynchronizer"
+        const val KEY_REPUBLISHED_IDS = "album_republished_ids"
+        // A private file younger than this may still have its own publish in flight
+        // (the capture path defers publishing behind the GPS fix).
+        const val REPUBLISH_MIN_AGE_MS = 10L * 60 * 1000
+    }
 
     suspend fun sync() = withContext(Dispatchers.IO) {
+
+        // Leftovers of writes interrupted by process death (BUG-026).
+        files.sweepTempFiles()
 
         // ── Pass 0: deduplicate existing DB rows by filePath ─────────────────────────
         dao.deleteFilepathDuplicates()
@@ -118,11 +133,9 @@ internal class GallerySynchronizer(
         val deletedNames = DeletionTombstones.deletedFilenames(context)
         val deletedDates = DeletionTombstones.deletedDates(context)
 
-        val allExistingDates = dao.getAllPhotoDates()
         // existingDays: still needed to trigger content:// URI migration for known days.
-        val existingDays = allExistingDates
-            .map { StreakCalculator.epochMillisToDayIndex(it) }
-            .toHashSet()
+        // Reads the frozen per-photo dayIndex (T-1), not a live re-derivation.
+        val existingDays = dao.getAllPhotoDayIndices().toHashSet()
 
         val selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?"
@@ -172,7 +185,10 @@ internal class GallerySynchronizer(
                 // use its MediaStore entry as a migration source either.
                 if (name in deletedNames || dateTaken in deletedDates) continue
 
-                val day = StreakCalculator.epochMillisToDayIndex(dateTaken)
+                // BUG-024: the filename's date was written in the zone the photo was
+                // taken in; re-deriving from dateTaken would use the zone the phone
+                // is in NOW, which may differ (recovery after traveling).
+                val day = dayIndexFromFilename(name) ?: StreakCalculator.epochMillisToDayIndex(dateTaken)
                 val mediaId = c.getLong(idCol)
                 val mediaUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId)
 
@@ -243,6 +259,7 @@ internal class GallerySynchronizer(
                         colorName = colorName,
                         colorHex = colorHex,
                         dateTaken = dateTaken,
+                        dayIndex = day,
                         latitude = null,
                         longitude = null,
                         locationName = null,
@@ -260,16 +277,81 @@ internal class GallerySynchronizer(
         if (pass2PathUpdates.isNotEmpty() || pass2Inserts.isNotEmpty()) {
             db.withTransaction {
                 for ((id, path) in pass2PathUpdates) dao.updateFilePath(id, path)
-                for (entity in pass2Inserts) dao.insert(entity)
+                for (entity in pass2Inserts) {
+                    // BUG-052: the dedup sets came from a snapshot taken before this
+                    // pass; a capture landing meanwhile must not be inserted twice.
+                    if (dao.getByDateTakenSecond(entity.dateTaken / 1000).isNotEmpty()) continue
+                    dao.insert(entity)
+                }
             }
         }
 
-        // Tombstones whose MediaStore ghost is gone protect nothing — drop them so
-        // the prefs sets stay bounded (M-10). Only after a SUCCESSFUL scan: a null
-        // cursor (permission denied) saw nothing and must not wipe live tombstones.
-        if (cursor != null) {
+        // Only a scan that could see EVERY album copy is evidence of absence. A null
+        // cursor saw nothing; and under partial media access (no permission on API
+        // 29+, or Android 14 "Selected photos") the query succeeds yet omits copies
+        // left by a previous install (BUG-027).
+        val completeScan = cursor != null && hasFullMediaAccess()
+        if (completeScan) {
+            // Tombstones whose MediaStore ghost is gone protect nothing — drop them
+            // so the prefs sets stay bounded (M-10).
             DeletionTombstones.pruneOrphaned(context, liveMediaNames, liveMediaDates)
+            republishMissingAlbumCopies(liveMediaNames, deletedNames, deletedDates)
         }
+    }
+
+    /**
+     * BUG-020/BUG-046: rows whose public album copy never landed — imports before
+     * they were published, or a capture whose deferred publish died with the
+     * process — have nothing to recover from after a reinstall or cloud restore.
+     * Publish them from the private file. Each row gets ONE attempt ever, so a copy
+     * the user deliberately removed from their system gallery isn't re-added on
+     * every launch.
+     */
+    private suspend fun republishMissingAlbumCopies(
+        liveNames: Set<String>,
+        deletedNames: Set<String>,
+        deletedDates: Set<Long>
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && ContextCompat.checkSelfPermission(
+                context, Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+
+        val rows = dao.getAllPhotosSnapshot()
+        val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val attempted = prefs.getStringSet(KEY_REPUBLISHED_IDS, emptySet())
+            ?.mapNotNullTo(HashSet()) { it.toLongOrNull() } ?: HashSet()
+        val cutoff = System.currentTimeMillis() - REPUBLISH_MIN_AGE_MS
+
+        for (row in rows) {
+            if (row.id in attempted || !row.filePath.startsWith("/")) continue
+            val file = File(row.filePath)
+            val name = file.name
+            if (!name.startsWith("ColorWalk_") || name in liveNames) continue
+            if (name in deletedNames || row.dateTaken in deletedDates) continue
+            if (!file.exists() || file.length() == 0L || file.lastModified() > cutoff) continue
+            val published = mediaGallery.publishFile(
+                file, name, row.dateTaken, row.latitude, row.longitude,
+                row.colorName, row.dominantColorHex
+            )
+            // A transient failure (storage full) keeps its attempt for next launch.
+            if (published) attempted += row.id
+        }
+        // Keep only ids that still exist, so the set stays bounded by the table.
+        val liveIds = rows.mapTo(HashSet()) { it.id }
+        prefs.edit()
+            .putStringSet(KEY_REPUBLISHED_IDS, attempted.filter { it in liveIds }.mapTo(HashSet()) { it.toString() })
+            .apply()
+    }
+
+    private fun hasFullMediaAccess(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            Manifest.permission.READ_MEDIA_IMAGES
+        else
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        // With READ_MEDIA_VISUAL_USER_SELECTED declared (manifest), an Android 14+
+        // "Selected photos" grant leaves READ_MEDIA_IMAGES denied — so this is false.
+        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
     /**
@@ -290,6 +372,17 @@ internal class GallerySynchronizer(
      * a millis suffix since v1.12 — restoring it keeps the parsed value identical to
      * the DB's millisecond dateTaken so the sync dedup guard matches exactly (B6).
      */
+    /**
+     * Local-calendar epoch day encoded in "ColorWalk_yyyyMMdd_…" — the date in the
+     * zone the photo was written in, i.e. the day it belongs to (BUG-024). Must
+     * agree with MIGRATION_3_4's SQL derivation of the same field.
+     */
+    internal fun dayIndexFromFilename(name: String): Int? = try {
+        val datePart = name.removePrefix("ColorWalk_").substringBefore('_')
+        if (!name.startsWith("ColorWalk_") || datePart.length != 8) null
+        else LocalDate.parse(datePart, DateTimeFormatter.BASIC_ISO_DATE).toEpochDay().toInt()
+    } catch (_: Exception) { null }
+
     internal fun parseDateFromFilename(name: String): Long? = try {
         val parts = name.removePrefix("ColorWalk_").removeSuffix(".jpg").split("_")
         if (parts.size < 2) null

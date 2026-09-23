@@ -97,33 +97,59 @@ object ExifIntegrity {
         return null
     }
 
+    /** Largest real-world UTC offset spread (UTC-12 … UTC+14 → at most 14 h either way). */
+    private const val MAX_ZONE_SHIFT_MS = 14L * 60 * 60 * 1000
+    /** Every real UTC offset is a multiple of 15 min (+5:30 India, +5:45 Nepal, …). */
+    private const val ZONE_STEP_MS = 15L * 60 * 1000
+
     /**
      * Cross-checks the photo's claimed capture time against its other timestamps.
      *
-     * @param captureMillis      claimed capture time (EXIF DateTimeOriginal or MediaStore DATE_TAKEN)
+     * BUG-017: the capture time can come from two sources that are each wrong in a
+     * known, legitimate way — MediaStore DATE_TAKEN (some OEMs store local-naive
+     * millis, shifted by the UTC offset) and the zone-less EXIF DateTimeOriginal
+     * (parsed in the device's zone, shifted by any travel since). A genuine photo
+     * has at least one right; a forged date is wrong in both, because MediaStore
+     * derives DATE_TAKEN from the (edited) EXIF. So each check fails only when EVERY
+     * available source fails it, and an original-vs-digitized gap shaped like a UTC
+     * offset (a multiple of 15 min, ≤ 14 h) is a timezone artifact, not an edit.
+     *
+     * @param captureMillis      claimed capture time (MediaStore DATE_TAKEN, or EXIF when absent)
      * @param digitizedMillis    EXIF DateTimeDigitized, when present
      * @param fileModifiedMillis filesystem/MediaStore last-modified time, when known (≤0 = unknown)
      * @param nowMillis          current device time
+     * @param exifOriginalMillis EXIF DateTimeOriginal parsed the same way as digitized, when present
      */
     fun evaluate(
         captureMillis: Long,
         digitizedMillis: Long?,
         fileModifiedMillis: Long,
-        nowMillis: Long
+        nowMillis: Long,
+        exifOriginalMillis: Long? = null
     ): Verdict {
-        if (captureMillis > nowMillis + FUTURE_CAPTURE_TOLERANCE_MS) {
+        val sources = listOfNotNull(captureMillis, exifOriginalMillis)
+        val earliest = sources.min()
+        if (earliest > nowMillis + FUTURE_CAPTURE_TOLERANCE_MS) {
             return Verdict.Tampered("capture time is in the future")
         }
-        if (digitizedMillis != null &&
-            kotlin.math.abs(captureMillis - digitizedMillis) > ORIGINAL_VS_DIGITIZED_TOLERANCE_MS
-        ) {
+        if (digitizedMillis != null && sources.none { consistent(it, digitizedMillis) }) {
             return Verdict.Tampered("original and digitized timestamps disagree")
         }
         if (fileModifiedMillis > 0 &&
-            fileModifiedMillis < captureMillis - MTIME_BEFORE_CAPTURE_TOLERANCE_MS
+            fileModifiedMillis < earliest - MTIME_BEFORE_CAPTURE_TOLERANCE_MS
         ) {
             return Verdict.Tampered("file predates its claimed capture time")
         }
         return Verdict.Ok
+    }
+
+    /** Within burst tolerance, allowing a timezone-shaped shift (15-min steps, ≤ 14 h). */
+    private fun consistent(a: Long, b: Long): Boolean {
+        val diff = kotlin.math.abs(a - b)
+        if (diff <= ORIGINAL_VS_DIGITIZED_TOLERANCE_MS) return true
+        if (diff > MAX_ZONE_SHIFT_MS + ORIGINAL_VS_DIGITIZED_TOLERANCE_MS) return false
+        val offStep = diff % ZONE_STEP_MS
+        return offStep <= ORIGINAL_VS_DIGITIZED_TOLERANCE_MS ||
+            ZONE_STEP_MS - offStep <= ORIGINAL_VS_DIGITIZED_TOLERANCE_MS
     }
 }

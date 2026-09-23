@@ -1,30 +1,36 @@
 package com.colorwalk.app.viewmodel
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.colorwalk.app.data.db.ColorSummary
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.data.repository.PhotoRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
+import androidx.annotation.StringRes
+import com.colorwalk.app.R
 
 enum class GalleryViewMode { COLOR, DATE, PLACE }
 
-enum class DateFilter(val label: String) {
-    ALL("All"),
-    THIS_WEEK("This Week"),
-    THIS_MONTH("This Month"),
-    LAST_3_MONTHS("Last 3 Months")
+enum class DateFilter(@StringRes val label: Int) {
+    ALL(R.string.filter_all),
+    THIS_WEEK(R.string.filter_this_week),
+    THIS_MONTH(R.string.filter_this_month),
+    LAST_3_MONTHS(R.string.filter_last_3_months)
 }
 
-enum class AlbumSortOrder(val label: String) {
-    NEWEST("Newest"),
-    OLDEST("Oldest")
+enum class AlbumSortOrder(@StringRes val label: Int) {
+    NEWEST(R.string.sort_newest),
+    OLDEST(R.string.sort_oldest)
 }
 
 data class PlaceSummary(
@@ -49,12 +55,20 @@ data class PhotoViewerState(
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
-class GalleryViewModel @Inject constructor(
-    private val repo: PhotoRepository
+class GalleryViewModel internal constructor(
+    private val repo: PhotoRepository,
+    private val savedState: SavedStateHandle,
+    // Where grouping/sorting runs; tests pass their own dispatcher.
+    private val compute: CoroutineDispatcher
 ) : ViewModel() {
 
-    private val rawColorFolders = repo.getDistinctColors()
-    private val rawAllPhotos    = repo.getAllPhotos()
+    @Inject constructor(repo: PhotoRepository, savedState: SavedStateHandle) :
+        this(repo, savedState, Dispatchers.Default)
+
+    // BUG-041: ONE Room observer for the whole table, shared by every derived list —
+    // five separate collectors used to re-run the full query on every row write.
+    private val rawAllPhotos = repo.getAllPhotos()
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
     private val _searchQuery    = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery
@@ -68,12 +82,6 @@ class GalleryViewModel @Inject constructor(
     private val _albumSortOrder = MutableStateFlow(AlbumSortOrder.NEWEST)
     val albumSortOrder: StateFlow<AlbumSortOrder> = _albumSortOrder
 
-    val colorFolders: StateFlow<List<ColorSummary>> =
-        combine(rawColorFolders, _searchQuery) { folders, query ->
-            if (query.isBlank()) folders
-            else folders.filter { it.colorName.contains(query, ignoreCase = true) }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
     // Presentation-derived folder cards (count + newest photo as thumbnail),
     // sorted by photo count so the user's strongest colors lead the grid.
     val colorFolderCards: StateFlow<List<ColorFolderInfo>> =
@@ -86,14 +94,22 @@ class GalleryViewModel @Inject constructor(
                 }
                 .filter { query.isBlank() || it.colorName.contains(query, ignoreCase = true) }
                 .sortedByDescending { it.photoCount }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        }.flowOn(compute).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // BUG-063: "now" for the relative date filters. The cutoffs were computed only when
+    // the photo list re-emitted, so "This Week" kept last week's start after a week
+    // boundary passed with the app open. GalleryScreen feeds this at each midnight.
+    private val _now = MutableStateFlow(System.currentTimeMillis())
+
+    fun onDayChanged(nowMillis: Long) { _now.value = nowMillis }
 
     val allPhotos: StateFlow<List<PhotoEntity>> =
-        combine(rawAllPhotos, _dateFilter, _dateSortOrder) { photos, filter, sort ->
+        combine(rawAllPhotos, _dateFilter, _dateSortOrder, _now) { photos, filter, sort, now ->
             val filtered = when (filter) {
                 DateFilter.ALL -> photos
                 DateFilter.THIS_WEEK -> {
                     val cal = Calendar.getInstance().apply {
+                        timeInMillis = now
                         set(Calendar.DAY_OF_WEEK, firstDayOfWeek)
                         set(Calendar.HOUR_OF_DAY, 0)
                         set(Calendar.MINUTE, 0)
@@ -104,6 +120,7 @@ class GalleryViewModel @Inject constructor(
                 }
                 DateFilter.THIS_MONTH -> {
                     val cutoff = Calendar.getInstance().apply {
+                        timeInMillis = now
                         set(Calendar.DAY_OF_MONTH, 1)
                         set(Calendar.HOUR_OF_DAY, 0)
                         set(Calendar.MINUTE, 0)
@@ -113,7 +130,7 @@ class GalleryViewModel @Inject constructor(
                     photos.filter { it.dateTaken >= cutoff }
                 }
                 DateFilter.LAST_3_MONTHS -> {
-                    val cutoff = Calendar.getInstance().apply { add(Calendar.MONTH, -3) }.timeInMillis
+                    val cutoff = Calendar.getInstance().apply { timeInMillis = now; add(Calendar.MONTH, -3) }.timeInMillis
                     photos.filter { it.dateTaken >= cutoff }
                 }
             }
@@ -121,7 +138,21 @@ class GalleryViewModel @Inject constructor(
                 AlbumSortOrder.NEWEST -> filtered.sortedByDescending { it.dateTaken }
                 AlbumSortOrder.OLDEST -> filtered.sortedBy { it.dateTaken }
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        }.flowOn(compute).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /**
+     * By Date grid sections ("September 2026" → photos), grouped here off the main
+     * thread (BUG-041) — the grid used to format every photo's date during composition.
+     * Follows [allPhotos]' filter and sort order.
+     */
+    val photosByMonth: StateFlow<List<Pair<String, List<PhotoEntity>>>> = allPhotos
+        .map { photos ->
+            val fmt = SimpleDateFormat("LLLL yyyy", Locale.getDefault()) // standalone month form (BUG-040)
+            // allPhotos is already sorted, so groupBy's insertion order is the display order.
+            photos.groupBy { fmt.format(Date(it.dateTaken)) }.toList()
+        }
+        .flowOn(compute)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val photosByPlace: StateFlow<List<PlaceSummary>> = rawAllPhotos
         .map { photos ->
@@ -137,6 +168,7 @@ class GalleryViewModel @Inject constructor(
                 }
                 .sortedByDescending { it.photoCount }
         }
+        .flowOn(compute)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private fun PhotoEntity.isUntagged(): Boolean {
@@ -148,6 +180,7 @@ class GalleryViewModel @Inject constructor(
 
     val untaggedPhotos: StateFlow<List<PhotoEntity>> = rawAllPhotos
         .map { photos -> photos.filter { it.isUntagged() } }
+        .flowOn(compute)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val hasUntaggedPhotos: StateFlow<Boolean> = untaggedPhotos
@@ -158,22 +191,22 @@ class GalleryViewModel @Inject constructor(
         .map { places -> places.map { it.locationName } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _showingUntagged  = MutableStateFlow(false)
-    val showingUntagged: StateFlow<Boolean> = _showingUntagged
+    // BUG-008: which tab / album / untagged list is open survives process death
+    // (SavedStateHandle), so returning to the app lands where the user left off.
+    // The full-screen viewer is intentionally NOT restored — its photo list is a
+    // snapshot too large and too stale to persist.
+    val showingUntagged: StateFlow<Boolean> = savedState.getStateFlow(KEY_UNTAGGED, false)
 
     private val _photoBeingTagged = MutableStateFlow<PhotoEntity?>(null)
     val photoBeingTagged: StateFlow<PhotoEntity?> = _photoBeingTagged
 
-    private val _viewMode = MutableStateFlow(GalleryViewMode.COLOR)
-    val viewMode: StateFlow<GalleryViewMode> = _viewMode
+    val viewMode: StateFlow<GalleryViewMode> = savedState.getStateFlow(KEY_VIEW_MODE, GalleryViewMode.COLOR)
 
-    private val _selectedColor = MutableStateFlow<String?>(null)
-    val selectedColor: StateFlow<String?> = _selectedColor
+    val selectedColor: StateFlow<String?> = savedState.getStateFlow(KEY_COLOR, null)
 
-    private val _selectedPlace = MutableStateFlow<String?>(null)
-    val selectedPlace: StateFlow<String?> = _selectedPlace
+    val selectedPlace: StateFlow<String?> = savedState.getStateFlow(KEY_PLACE, null)
 
-    private val rawPhotosForColor: Flow<List<PhotoEntity>> = _selectedColor
+    private val rawPhotosForColor: Flow<List<PhotoEntity>> = selectedColor
         .flatMapLatest { colorName ->
             if (colorName == null) flowOf(emptyList())
             else repo.getPhotosByColor(colorName)
@@ -185,10 +218,10 @@ class GalleryViewModel @Inject constructor(
                 AlbumSortOrder.NEWEST -> photos.sortedByDescending { it.dateTaken }
                 AlbumSortOrder.OLDEST -> photos.sortedBy { it.dateTaken }
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        }.flowOn(compute).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val photosForPlace: StateFlow<List<PhotoEntity>> =
-        combine(rawAllPhotos, _selectedPlace, _albumSortOrder) { photos, place, order ->
+        combine(rawAllPhotos, selectedPlace, _albumSortOrder) { photos, place, order ->
             if (place == null) emptyList()
             else {
                 val filtered = photos.filter { photo ->
@@ -200,26 +233,41 @@ class GalleryViewModel @Inject constructor(
                     AlbumSortOrder.OLDEST -> filtered.sortedBy { it.dateTaken }
                 }
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        }.flowOn(compute).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _viewerState = MutableStateFlow<PhotoViewerState?>(null)
-    val viewerState: StateFlow<PhotoViewerState?> = _viewerState
+
+    /**
+     * BUG-063: the viewer's list is a snapshot taken when it opened (order and
+     * membership), but each photo in it is the LIVE row — a place name landing, a
+     * note, or resolveShareFile's content:// → private-path migration now reach the
+     * open viewer (a later rotate used to act on the stale content:// path). A row
+     * not (yet) in the table keeps its snapshot.
+     */
+    val viewerState: StateFlow<PhotoViewerState?> =
+        combine(_viewerState, rawAllPhotos.onStart { emit(emptyList()) }) { vs, all ->
+            if (vs == null) null
+            else {
+                val live = all.associateBy { it.id }
+                vs.copy(photos = vs.photos.map { live[it.id] ?: it })
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init {
         viewModelScope.launch { repo.backfillLocationData() }
     }
 
-    fun setViewMode(mode: GalleryViewMode)         { _viewMode.value = mode }
-    fun selectColor(colorName: String)             { _selectedColor.value = colorName }
-    fun clearSelection()                           { _selectedColor.value = null }
-    fun selectPlace(name: String)                  { _selectedPlace.value = name }
-    fun clearPlaceSelection()                      { _selectedPlace.value = null }
+    fun setViewMode(mode: GalleryViewMode)         { savedState[KEY_VIEW_MODE] = mode }
+    fun selectColor(colorName: String)             { savedState[KEY_COLOR] = colorName }
+    fun clearSelection()                           { savedState[KEY_COLOR] = null }
+    fun selectPlace(name: String)                  { savedState[KEY_PLACE] = name }
+    fun clearPlaceSelection()                      { savedState[KEY_PLACE] = null }
     fun setSearchQuery(query: String)              { _searchQuery.value = query }
     fun setDateFilter(filter: DateFilter)          { _dateFilter.value = filter }
     fun setDateSortOrder(order: AlbumSortOrder)    { _dateSortOrder.value = order }
     fun setAlbumSortOrder(order: AlbumSortOrder)   { _albumSortOrder.value = order }
-    fun openUntagged()                             { _showingUntagged.value = true }
-    fun closeUntagged()                            { _showingUntagged.value = false }
+    fun openUntagged()                             { savedState[KEY_UNTAGGED] = true }
+    fun closeUntagged()                            { savedState[KEY_UNTAGGED] = false }
     fun startTagging(photo: PhotoEntity)           { _photoBeingTagged.value = photo }
     fun cancelTagging()                            { _photoBeingTagged.value = null }
     fun submitTag(photo: PhotoEntity, locationName: String) {
@@ -258,7 +306,7 @@ class GalleryViewModel @Inject constructor(
      */
     fun prepareShare(photo: PhotoEntity, onReady: (java.io.File?) -> Unit) {
         viewModelScope.launch {
-            onReady(repo.resolveShareFile(photo))
+            onReady(repo.prepareShareFile(photo))
         }
     }
 
@@ -275,10 +323,10 @@ class GalleryViewModel @Inject constructor(
         }
     }
 
-    fun rotatePhoto(photo: PhotoEntity, onDone: () -> Unit) {
+    /** [onDone] receives whether the rotation happened (BUG-059). */
+    fun rotatePhoto(photo: PhotoEntity, onDone: (Boolean) -> Unit) {
         viewModelScope.launch {
-            repo.rotatePhoto(photo)
-            onDone()
+            onDone(repo.rotatePhoto(photo))
         }
     }
 
@@ -290,6 +338,13 @@ class GalleryViewModel @Inject constructor(
             _viewerState.value = if (newList.isEmpty()) null
             else PhotoViewerState(newList, vs.initialIndex.coerceAtMost(newList.lastIndex))
         }
+    }
+
+    private companion object {
+        const val KEY_VIEW_MODE = "gallery_view_mode"
+        const val KEY_COLOR     = "gallery_selected_color"
+        const val KEY_PLACE     = "gallery_selected_place"
+        const val KEY_UNTAGGED  = "gallery_showing_untagged"
     }
 
     // Bucket to ~11 km grid. Floor on signed value so bucket boundaries are symmetric

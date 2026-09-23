@@ -54,13 +54,15 @@ class StatsViewModelTest {
         id: Long,
         dateTaken: Long = daysAgo(0),
         colorName: String = "Red",
-        colorHex: String = "#E53935"
+        colorHex: String = "#E53935",
+        dayIndex: Int = StreakCalculator.epochMillisToDayIndex(dateTaken)
     ) = PhotoEntity(
         id = id,
         filePath = "/photos/$id.jpg",
         colorName = colorName,
         colorHex = colorHex,
         dateTaken = dateTaken,
+        dayIndex = dayIndex,
         latitude = null,
         longitude = null,
         locationName = null,
@@ -270,6 +272,36 @@ class StatsViewModelTest {
         advanceUntilIdle()
         val expectedIndex = StreakCalculator.epochMillisToDayIndex(ts)
         assertTrue(vm.state.value.photosByDayIndex.containsKey(expectedIndex))
+    }
+
+    // ── frozen dayIndex (T-1 regression) ─────────────────────────────────────
+    // bestStreak/totalActiveDays/photosByDayIndex must read PhotoEntity.dayIndex
+    // as stored, never re-derive it from dateTaken — a device timezone change
+    // after capture must not reclassify an already-captured photo onto a
+    // different day.
+
+    @Test
+    fun load_bestStreak_usesFrozenDayIndex_notLiveRederivationFromDateTaken() = runTest {
+        // Two photos whose dateTaken values are far apart (would rederive to
+        // non-consecutive days), but whose frozen dayIndex values ARE consecutive.
+        val photos = listOf(
+            makePhoto(1L, dateTaken = daysAgo(50), dayIndex = 100),
+            makePhoto(2L, dateTaken = daysAgo(0), dayIndex = 101)
+        )
+        every { repo.getAllPhotos() } returns flowOf(photos)
+        val vm = buildViewModel()
+        advanceUntilIdle()
+        assertEquals(2, vm.state.value.bestStreak)
+        assertEquals(2, vm.state.value.totalActiveDays)
+    }
+
+    @Test
+    fun load_photosByDayIndex_keyedByFrozenDayIndex_notDateTaken() = runTest {
+        val photo = makePhoto(1L, dateTaken = daysAgo(50), dayIndex = 42)
+        every { repo.getAllPhotos() } returns flowOf(listOf(photo))
+        val vm = buildViewModel()
+        advanceUntilIdle()
+        assertEquals(listOf(photo), vm.state.value.photosByDayIndex[42])
     }
 
     // ── selectDay ─────────────────────────────────────────────────────────────

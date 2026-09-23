@@ -77,7 +77,8 @@ class PhotoRepositoryIntegrationTest {
         colorHex: String = "#E53935",
         latitude: Double? = null,
         longitude: Double? = null,
-        locationName: String? = null
+        locationName: String? = null,
+        dayIndex: Int = StreakCalculator.epochMillisToDayIndex(dateTaken)
     ): Long {
         return db.photoDao().insert(
             PhotoEntity(
@@ -85,6 +86,7 @@ class PhotoRepositoryIntegrationTest {
                 colorName = colorName,
                 colorHex = colorHex,
                 dateTaken = dateTaken,
+                dayIndex = dayIndex,
                 latitude = latitude,
                 longitude = longitude,
                 locationName = locationName,
@@ -240,6 +242,42 @@ class PhotoRepositoryIntegrationTest {
             }
         }
         assertEquals(40, repo.getStreak())
+    }
+
+    // ── timezone travel (T-1 regression) ───────────────────────────────────────
+    // dayIndex is frozen at capture/import time and must never be re-derived from
+    // dateTaken later — travel (the device's zone auto-updates mid-trip) would
+    // otherwise retroactively reclassify an already-captured photo onto a
+    // different day and break an otherwise-unbroken streak.
+
+    @Test
+    fun getStreak_trustsFrozenDayIndex_evenWhenDateTakenWouldRederiveDifferently() = runTest {
+        insertPhoto(dateTaken = daysAgoNoon(1))
+        insertPhoto(dateTaken = midnightToday() + 3600_000L)
+        assertEquals(2, repo.getStreak())
+
+        // Simulates a photo captured 2 days ago (frozen dayIndex) whose raw
+        // dateTaken would live-rederive to 10 days ago — e.g. after the device's
+        // zone changed. The chain must still extend through the frozen index.
+        insertPhoto(
+            dateTaken = daysAgoNoon(10),
+            dayIndex = StreakCalculator.epochMillisToDayIndex(daysAgoNoon(2))
+        )
+
+        assertEquals(
+            "Streak must follow the frozen dayIndex, not a live re-derivation from dateTaken",
+            3, repo.getStreak()
+        )
+    }
+
+    @Test
+    fun getCapturedDayIndices_reflectsFrozenDayIndex_notDateTaken() = runTest {
+        val bogusDateTaken = daysAgoNoon(99) // would rederive to a day nothing else matches
+        val frozenIndex = StreakCalculator.epochMillisToDayIndex(midnightToday())
+        insertPhoto(dateTaken = bogusDateTaken, dayIndex = frozenIndex)
+
+        val indices = repo.getCapturedDayIndices()
+        assertEquals(setOf(frozenIndex), indices)
     }
 
     // ── deletion tombstones (A2 regression) ───────────────────────────────────

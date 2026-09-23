@@ -10,6 +10,12 @@ data class PhotoEntity(
     val colorName: String,       // e.g. "Red"
     val colorHex: String,        // e.g. "#E53935"
     val dateTaken: Long,         // epoch millis
+    // Local-calendar-day epoch index (StreakCalculator.epochMillisToDayIndex), frozen
+    // at capture/import time in the zone the user was in THEN. Streak/history logic
+    // must read this column, never re-derive it from dateTaken later — recomputing
+    // with whatever zone the device is CURRENTLY set to lets travel retroactively
+    // reclassify an already-captured photo onto a different day and break the streak.
+    val dayIndex: Int,
     val latitude: Double?,
     val longitude: Double?,
     val locationName: String?,   // reverse-geocoded label

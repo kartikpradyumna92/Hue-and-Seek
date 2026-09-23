@@ -4,6 +4,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.cash.turbine.test
+import com.colorwalk.app.domain.StreakCalculator
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -61,6 +62,7 @@ class PhotoDaoTest {
         colorName = colorName,
         colorHex = colorHex,
         dateTaken = dateTaken,
+        dayIndex = StreakCalculator.epochMillisToDayIndex(dateTaken),
         latitude = null,
         longitude = null,
         locationName = null,
@@ -159,6 +161,45 @@ class PhotoDaoTest {
         assertEquals("getAllPhotoDates must return all 65 entries", 65, dates.size)
     }
 
+    // ── hasPhotoOnDay (BUG-025) ──────────────────────────────────────────────
+
+    @Test
+    fun hasPhotoOnDay_matchesTheFrozenDayIndex_notDateTaken() = runTest {
+        val ts = midnightToday() + 1000L
+        val frozen = StreakCalculator.epochMillisToDayIndex(ts) - 1   // credited to "yesterday"
+        dao.insert(makeEntity(dateTaken = ts).copy(dayIndex = frozen))
+        assertTrue(dao.hasPhotoOnDay(frozen))
+        assertTrue(!dao.hasPhotoOnDay(frozen + 1))
+    }
+
+    // ── getAllPhotoDayIndices (T-1) ──────────────────────────────────────────
+
+    @Test
+    fun getAllPhotoDayIndices_returnsTheFrozenValue_notALiveRederivation() = runTest {
+        // The whole point of storing dayIndex is that it stays fixed even if it no
+        // longer matches what StreakCalculator.epochMillisToDayIndex(dateTaken)
+        // would compute right now (e.g. after the device's zone changed) — a
+        // frozen value that disagreed with a stale dateTaken would still be correct.
+        val ts = midnightToday() + 1000L
+        val frozenIndex = StreakCalculator.epochMillisToDayIndex(ts) + 999 // deliberately "wrong"
+        dao.insert(
+            PhotoEntity(
+                filePath = "file:///photos/test.jpg",
+                colorName = "Red",
+                colorHex = "#E53935",
+                dateTaken = ts,
+                dayIndex = frozenIndex,
+                latitude = null,
+                longitude = null,
+                locationName = null,
+                dominantColorHex = "#E53935"
+            )
+        )
+
+        val indices = dao.getAllPhotoDayIndices()
+        assertEquals(listOf(frozenIndex), indices)
+    }
+
     // ── getPhotoIdForDay ──────────────────────────────────────────────────────
 
     @Test
@@ -226,32 +267,6 @@ class PhotoDaoTest {
         val snapshot = dao.getAllPhotosSnapshot()
         assertEquals(1, snapshot.size)
         assertEquals(id2, snapshot[0].id)
-    }
-
-    // ── getDistinctColors ─────────────────────────────────────────────────────
-
-    @Test
-    fun getDistinctColors_returnsUniqueColorEntries() = runTest {
-        dao.insert(makeEntity(colorName = "Red", colorHex = "#E53935", dateTaken = midnightToday() + 1000L))
-        dao.insert(makeEntity(colorName = "Red", colorHex = "#E53935", dateTaken = midnightToday() + 2000L))
-        dao.insert(makeEntity(colorName = "Blue", colorHex = "#1E88E5", dateTaken = midnightToday() + 3000L))
-
-        dao.getDistinctColors().test {
-            val colors = awaitItem()
-            assertEquals("Should have 2 distinct colors", 2, colors.size)
-            assertTrue(colors.any { it.colorName == "Red" })
-            assertTrue(colors.any { it.colorName == "Blue" })
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun getDistinctColors_withNoPhotos_emitsEmptyList() = runTest {
-        dao.getDistinctColors().test {
-            val colors = awaitItem()
-            assertTrue(colors.isEmpty())
-            cancelAndIgnoreRemainingEvents()
-        }
     }
 
     // ── countByDateTaken (B5 import-dedup guard) ──────────────────────────────

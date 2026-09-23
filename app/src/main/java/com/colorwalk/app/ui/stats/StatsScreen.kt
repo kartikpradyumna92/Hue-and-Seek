@@ -44,13 +44,26 @@ import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.ui.components.ZoomableAsyncImage
 import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.photoImageRequest
+import com.colorwalk.app.ui.components.rememberDayTick
 import com.colorwalk.app.ui.components.rememberZoomState
+import androidx.compose.runtime.saveable.rememberSaveable
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.time.format.TextStyle
 import com.colorwalk.app.domain.StreakCalculator
 import com.colorwalk.app.viewmodel.StatsUiState
 import com.colorwalk.app.viewmodel.StatsViewModel
 import java.io.File as JavaFile
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
+import com.colorwalk.app.ui.components.localizedDateFormat
+import com.colorwalk.app.ui.components.formatClockTime
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,23 +94,23 @@ fun StatsScreen(
                 IconButton(onClick = onBack) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = stringResource(R.string.action_back),
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
                 Text(
-                    "Streaks & Stats",
+                    stringResource(R.string.stats_title),
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.padding(start = 4.dp)
                 )
             }
 
-            StatsSection(state = state)
+            StatsSection(state = state, prepareShare = viewModel::prepareShare)
 
             Spacer(Modifier.height(8.dp))
             Text(
-                "YOUR WALK HISTORY",
+                stringResource(R.string.stats_history_heading),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
@@ -106,7 +119,8 @@ fun StatsScreen(
                 photosByDayIndex = state.photosByDayIndex,
                 onDayClick = { viewModel.selectDay(it) }
             )
-            Spacer(Modifier.height(32.dp))
+            // Last calendar row clears the navigation bar when scrolled to the end (BUG-033).
+            Spacer(Modifier.navigationBarsPadding().height(32.dp))
         }
 
         // Bottom sheet for tapped day's photos
@@ -126,7 +140,10 @@ fun StatsScreen(
 // ── Stats summary ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun StatsSection(state: StatsUiState) {
+private fun StatsSection(
+    state: StatsUiState,
+    prepareShare: (PhotoEntity, (JavaFile?) -> Unit) -> Unit
+) {
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -137,16 +154,16 @@ private fun StatsSection(state: StatsUiState) {
                 icon = Icons.Default.LocalFireDepartment,
                 iconTint = Color(0xFFFF6D00),
                 value = "${state.currentStreak}",
-                unit = "days",
-                label = "Current streak"
+                unit = pluralStringResource(R.plurals.unit_days, state.currentStreak),
+                label = stringResource(R.string.stats_current_streak)
             )
             StatCard(
                 modifier = Modifier.weight(1f),
                 icon = Icons.Default.EmojiEvents,
                 iconTint = Color(0xFFFFD700),
                 value = "${state.bestStreak}",
-                unit = "days",
-                label = "Best streak"
+                unit = pluralStringResource(R.plurals.unit_days, state.bestStreak),
+                label = stringResource(R.string.stats_best_streak)
             )
         }
         Spacer(Modifier.height(12.dp))
@@ -160,7 +177,7 @@ private fun StatsSection(state: StatsUiState) {
                 iconTint = MaterialTheme.colorScheme.primary,
                 value = "${state.totalPhotos}",
                 unit = null,
-                label = "Photos taken"
+                label = stringResource(R.string.stats_photos_taken)
             )
             StatCard(
                 modifier = Modifier.weight(1f),
@@ -168,13 +185,13 @@ private fun StatsSection(state: StatsUiState) {
                 iconTint = MaterialTheme.colorScheme.tertiary,
                 value = "${state.totalActiveDays}",
                 unit = null,
-                label = "Active days"
+                label = stringResource(R.string.stats_active_days)
             )
         }
         MilestoneProgressCard(currentStreak = state.currentStreak)
         if (state.totalPhotos > 0) {
             Spacer(Modifier.height(12.dp))
-            ShareStreakButton(state = state)
+            ShareStreakButton(state = state, prepareShare = prepareShare)
         }
         if (state.favouriteColorName != null) {
             Spacer(Modifier.height(12.dp))
@@ -197,14 +214,14 @@ private fun StatsSection(state: StatsUiState) {
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text(
-                            "FAVOURITE COLOR",
-                            fontSize = 10.sp,
+                            stringResource(R.string.stats_favourite_color),
+                            fontSize = 11.sp,
                             letterSpacing = 1.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
                         Text(
-                            state.favouriteColorName,
+                            colorDisplayName(state.favouriteColorName),
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = favColor
@@ -252,7 +269,7 @@ private fun StatCard(
                     Text(
                         unit,
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
@@ -260,7 +277,7 @@ private fun StatCard(
             Text(
                 label,
                 fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
             )
         }
     }
@@ -284,13 +301,13 @@ private fun MilestoneProgressCard(currentStreak: Int) {
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "NEXT MILESTONE",
+                    stringResource(R.string.stats_next_milestone),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
                 )
                 Text(
-                    "$next days",
+                    pluralStringResource(R.plurals.stats_milestone_days, next, next),
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -307,7 +324,7 @@ private fun MilestoneProgressCard(currentStreak: Int) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "${next - currentStreak} day${if (next - currentStreak != 1) "s" else ""} to go — keep walking!",
+                pluralStringResource(R.plurals.stats_days_to_go, next - currentStreak, next - currentStreak),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -317,33 +334,43 @@ private fun MilestoneProgressCard(currentStreak: Int) {
 
 /** Shares the most recent photo + streak brag via the system share sheet. */
 @Composable
-private fun ShareStreakButton(state: StatsUiState) {
+private fun ShareStreakButton(
+    state: StatsUiState,
+    // Resolves the photo to a share-safe file off the main thread — location
+    // stripped unless the user opted in (BUG-062).
+    prepareShare: (PhotoEntity, (JavaFile?) -> Unit) -> Unit
+) {
     val context = LocalContext.current
+    fun launch(photoFile: JavaFile?) {
+        try {
+            val text = buildString {
+                append(context.resources.getQuantityString(
+                    R.plurals.stats_share_streak, state.currentStreak, state.currentStreak))
+                append(" ")
+                append(context.resources.getQuantityString(
+                    R.plurals.stats_share_photos, state.totalPhotos, state.totalPhotos))
+            }
+            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                putExtra(android.content.Intent.EXTRA_TEXT, text)
+                if (photoFile != null) {
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        context, "${context.packageName}.fileprovider", photoFile
+                    )
+                    type = "image/jpeg"
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } else {
+                    type = "text/plain"
+                }
+            }
+            context.startActivity(android.content.Intent.createChooser(intent, context.getString(R.string.stats_share_chooser)))
+        } catch (_: Exception) { /* no share targets — never crash */ }
+    }
     FilledTonalButton(
         onClick = {
-            try {
-                val latest = state.photosByDayIndex.values.firstOrNull()?.firstOrNull()
-                val text = buildString {
-                    append("🔥 ${state.currentStreak}-day color walk streak on Hue & Seek!")
-                    append(" ${state.totalPhotos} photos and counting.")
-                }
-                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                    putExtra(android.content.Intent.EXTRA_TEXT, text)
-                    if (latest != null && latest.filePath.startsWith("/")) {
-                        val uri = androidx.core.content.FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            JavaFile(latest.filePath)
-                        )
-                        type = "image/jpeg"
-                        putExtra(android.content.Intent.EXTRA_STREAM, uri)
-                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    } else {
-                        type = "text/plain"
-                    }
-                }
-                context.startActivity(android.content.Intent.createChooser(intent, "Share your streak"))
-            } catch (_: Exception) { /* no share targets / file gone — never crash */ }
+            val latest = state.photosByDayIndex.values.firstOrNull()?.firstOrNull()
+            // No photo (or it can't be shared safely): the streak text still goes out.
+            if (latest == null) launch(null) else prepareShare(latest) { launch(it) }
         },
         modifier = Modifier
             .fillMaxWidth()
@@ -352,27 +379,39 @@ private fun ShareStreakButton(state: StatsUiState) {
     ) {
         Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
-        Text("Share my streak", style = MaterialTheme.typography.labelLarge)
+        Text(stringResource(R.string.stats_share_button), style = MaterialTheme.typography.labelLarge)
     }
 }
 
 // ── Monthly calendar ──────────────────────────────────────────────────────────
 
-private data class DayCell(val dayOfMonth: Int, val dayIndex: Int)
+internal data class DayCell(val dayOfMonth: Int, val dayIndex: Int)
 
 @Composable
 private fun MonthCalendar(
     photosByDayIndex: Map<Int, List<PhotoEntity>>,
     onDayClick: (List<PhotoEntity>) -> Unit
 ) {
-    val todayDayIndex = remember { StreakCalculator.epochMillisToDayIndex(System.currentTimeMillis()) }
-    var displayYear by remember { mutableStateOf(Calendar.getInstance().get(Calendar.YEAR)) }
-    var displayMonth by remember { mutableStateOf(Calendar.getInstance().get(Calendar.MONTH)) }
+    // BUG-037: "today" follows midnight while Stats stays open, and the month being
+    // viewed survives activity recreation / process death.
+    val todayDayIndex = StreakCalculator.epochMillisToDayIndex(rememberDayTick())
+    var displayYear by rememberSaveable { mutableIntStateOf(Calendar.getInstance().get(Calendar.YEAR)) }
+    var displayMonth by rememberSaveable { mutableIntStateOf(Calendar.getInstance().get(Calendar.MONTH)) }
     var swipeDelta by remember { mutableFloatStateOf(0f) }
 
-    val weeks = remember(displayYear, displayMonth) { buildMonthGrid(displayYear, displayMonth) }
+    // The locale's first day of the week (Monday in most of the world), not a
+    // hardcoded Sunday.
+    val firstDayOfWeek = remember { Calendar.getInstance().firstDayOfWeek }
+    val weeks = remember(displayYear, displayMonth, firstDayOfWeek) {
+        buildMonthGrid(displayYear, displayMonth, firstDayOfWeek)
+    }
+    val weekdayLetters = remember(firstDayOfWeek) {
+        // Calendar.SUNDAY = 1 … SATURDAY = 7  →  java.time DayOfWeek (MONDAY = 1)
+        val first = DayOfWeek.of((firstDayOfWeek + 5) % 7 + 1)
+        (0L until 7L).map { first.plus(it).getDisplayName(TextStyle.NARROW, Locale.getDefault()) }
+    }
     val monthLabel = remember(displayYear, displayMonth) {
-        SimpleDateFormat("MMMM yyyy", Locale.getDefault())
+        localizedDateFormat("yMMMM")
             .format(Calendar.getInstance().also { it.set(displayYear, displayMonth, 1) }.time)
     }
 
@@ -421,7 +460,7 @@ private fun MonthCalendar(
             IconButton(onClick = { prevMonth() }) {
                 Icon(
                     Icons.Default.ChevronLeft,
-                    contentDescription = "Previous month",
+                    contentDescription = stringResource(R.string.stats_prev_month),
                     tint = MaterialTheme.colorScheme.onBackground
                 )
             }
@@ -434,7 +473,7 @@ private fun MonthCalendar(
             IconButton(onClick = { nextMonth() }) {
                 Icon(
                     Icons.Default.ChevronRight,
-                    contentDescription = "Next month",
+                    contentDescription = stringResource(R.string.stats_next_month),
                     tint = MaterialTheme.colorScheme.onBackground
                 )
             }
@@ -446,14 +485,14 @@ private fun MonthCalendar(
                 .fillMaxWidth()
                 .padding(vertical = 4.dp)
         ) {
-            listOf("S", "M", "T", "W", "T", "F", "S").forEach { d ->
+            weekdayLetters.forEach { d ->
                 Text(
                     d,
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Center,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                 )
             }
         }
@@ -510,10 +549,19 @@ private fun CalendarDayCell(
                     .clickable { onDayClick(photos!!) },
                 contentAlignment = Alignment.Center
             ) {
+                // The date leads, so TalkBack users know WHICH day this is (BUG-037).
+                val dateLabel = remember(cell.dayIndex) {
+                    LocalDate.ofEpochDay(cell.dayIndex.toLong())
+                        .format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG))
+                }
+                val firstColor = colorDisplayName(firstPhoto.colorName)
                 AsyncImage(
                     model = photoImageRequest(context, firstPhoto.filePath),
-                    contentDescription = "${firstPhoto.colorName} captured" +
-                        if (photos.size > 1) ", ${photos.size} photos" else "",
+                    contentDescription = if (photos.size > 1) {
+                        pluralStringResource(R.plurals.stats_day_captured_many, photos.size, dateLabel, firstColor, photos.size)
+                    } else {
+                        stringResource(R.string.stats_day_captured, dateLabel, firstColor)
+                    },
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -548,7 +596,7 @@ private fun CalendarDayCell(
                     "${cell.dayOfMonth}",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(
-                        alpha = if (isToday) 0.85f else 0.35f
+                        alpha = if (isToday) 0.85f else 0.7f
                     ),
                     fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
                 )
@@ -557,16 +605,18 @@ private fun CalendarDayCell(
     }
 }
 
-private fun buildMonthGrid(year: Int, month: Int): List<List<DayCell?>> {
+/** [firstDayOfWeek]: a java.util.Calendar day constant (SUNDAY = 1). */
+internal fun buildMonthGrid(year: Int, month: Int, firstDayOfWeek: Int = Calendar.SUNDAY): List<List<DayCell?>> {
     val cal = Calendar.getInstance().apply {
         set(year, month, 1, 0, 0, 0)
         set(Calendar.MILLISECOND, 0)
     }
-    val firstDow = cal.get(Calendar.DAY_OF_WEEK) - 1  // 0 = Sunday
+    // Blank cells before the 1st, counted from the locale's first weekday.
+    val leading = (cal.get(Calendar.DAY_OF_WEEK) - firstDayOfWeek + 7) % 7
     val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
 
     val cells = mutableListOf<DayCell?>()
-    repeat(firstDow) { cells.add(null) }
+    repeat(leading) { cells.add(null) }
 
     for (day in 1..daysInMonth) {
         cal.set(Calendar.DAY_OF_MONTH, day)
@@ -591,8 +641,8 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
     val currentPhoto = photos[pagerState.currentPage]
     val accentColor = parseAccentHex(currentPhoto.colorHex)
     val dateStr = remember(currentPhoto.dateTaken) {
-        SimpleDateFormat("EEEE, MMMM d, yyyy  •  h:mm a", Locale.getDefault())
-            .format(Date(currentPhoto.dateTaken))
+        val date = Date(currentPhoto.dateTaken)
+        localizedDateFormat("yMMMMEEEEd").format(date) + "  •  " + formatClockTime(context, date)
     }
     // Reset zoom whenever the visible page changes, same as the gallery viewer.
     val zoomState = rememberZoomState(resetKey = pagerState.currentPage)
@@ -611,7 +661,7 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
             val pageAccent = parseAccentHex(photo.colorHex)
             ZoomableAsyncImage(
                 model = photoImageRequest(context, photo.filePath),
-                contentDescription = "${photo.colorName} photo",
+                contentDescription = stringResource(R.string.photo_desc, colorDisplayName(photo.colorName)),
                 state = zoomState,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -657,7 +707,7 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    currentPhoto.colorName,
+                    colorDisplayName(currentPhoto.colorName),
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = accentColor
@@ -666,7 +716,7 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
                 Text(
                     currentPhoto.colorHex.uppercase(),
                     fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     letterSpacing = 1.sp
                 )
             }
@@ -696,9 +746,9 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Dominant  ",
+                    stringResource(R.string.stats_dominant) + "  ",
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                 )
                 Box(
                     modifier = Modifier
@@ -710,7 +760,7 @@ private fun PhotoDetailSheet(photos: List<PhotoEntity>) {
                 Text(
                     currentPhoto.dominantColorHex.uppercase(),
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     letterSpacing = 1.sp
                 )
             }

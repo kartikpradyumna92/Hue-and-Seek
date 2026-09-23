@@ -40,6 +40,11 @@ private val NAV_SLIDE_SPRING = spring(
     visibilityThreshold = IntOffset.VisibilityThreshold
 )
 
+private val LOCATION_PERMISSIONS = listOf(
+    Manifest.permission.ACCESS_FINE_LOCATION,
+    Manifest.permission.ACCESS_COARSE_LOCATION
+)
+
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
@@ -79,11 +84,18 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
     val cameraGranted = remember {
         ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     }
+    // BUG-035: someone who already answered the permission dialog (and declined) got
+    // the rationale screen again on EVERY launch — and with a permanent denial its
+    // Continue does nothing. Once asked, go Home; the Camera pane owns recovery
+    // (Grant Access / Open Settings).
+    val cameraAskedBefore = remember {
+        prefs.getBoolean(com.colorwalk.app.ui.camera.KEY_CAMERA_PERMISSION_REQUESTED, false)
+    }
 
     val startDestination = when {
-        !hasSeenOnboarding -> "onboarding"
-        !cameraGranted     -> "permissions"
-        else               -> "home"
+        !hasSeenOnboarding                  -> "onboarding"
+        !cameraGranted && !cameraAskedBefore -> "permissions"
+        else                                -> "home"
     }
 
     NavHost(navController, startDestination = startDestination) {
@@ -94,6 +106,9 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
                     prefs.edit().putBoolean("onboarding_seen", true).apply()
                     navController.navigate("permissions") {
                         popUpTo("onboarding") { inclusive = true }
+                        // BUG-034: a double tap on "Get Started" stacked two permission
+                        // screens, so Back from Home led to the rationale again.
+                        launchSingleTop = true
                     }
                 }
             )
@@ -103,9 +118,17 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
             val permissionsToRequest = remember {
                 buildList {
                     add(Manifest.permission.CAMERA)
-                    add(Manifest.permission.ACCESS_FINE_LOCATION)
+                    // Android 12+ silently ignores a FINE-only request from apps
+                    // targeting S+; COARSE must accompany it (the user may still pick
+                    // "approximate", which getFreshLocation handles).
+                    addAll(LOCATION_PERMISSIONS)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         add(Manifest.permission.READ_MEDIA_IMAGES)
+                        // Requested together, per the Android 14 partial-access model
+                        // (the manifest declares it — see BUG-027).
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+                        }
                         add(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
                         add(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -127,6 +150,7 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
             val goHome = {
                 navController.navigate("home") {
                     popUpTo("permissions") { inclusive = true }
+                    launchSingleTop = true   // BUG-034: auto-skip + tap can both fire
                 }
             }
 
@@ -147,7 +171,17 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
             }
 
             PermissionRationaleScreen(
-                onContinue = { launcher.launch(permissionsToRequest.toTypedArray()) }
+                onContinue = {
+                    // This request already includes COARSE, so the home route's one-time
+                    // location re-ask must not fire right after a deliberate denial here.
+                    prefs.edit()
+                        .putBoolean("location_requested_v2", true)
+                        // Lets the Camera pane tell "never asked" from "permanently
+                        // denied" (BUG-049).
+                        .putBoolean(com.colorwalk.app.ui.camera.KEY_CAMERA_PERMISSION_REQUESTED, true)
+                        .apply()
+                    launcher.launch(permissionsToRequest.toTypedArray())
+                }
             )
         }
 
@@ -155,23 +189,35 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
             // A4: ACCESS_MEDIA_LOCATION is silently granted alongside photo access but
             // must be explicitly requested. Deferred here so it never fires before the
             // onboarding or "Before we begin" permission rationale screen is shown.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val activity = context as? android.app.Activity
-                LaunchedEffect(Unit) {
-                    // L-9: ask at most once — this LaunchedEffect re-fires on every
-                    // return to the home route, and if the permission was hard-denied
-                    // the request would otherwise repeat silently forever.
-                    val alreadyAsked = prefs.getBoolean("aml_requested", false)
-                    if (activity != null && !alreadyAsked &&
-                        ContextCompat.checkSelfPermission(
-                            context, Manifest.permission.ACCESS_MEDIA_LOCATION
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        prefs.edit().putBoolean("aml_requested", true).apply()
-                        ActivityCompat.requestPermissions(
-                            activity, arrayOf(Manifest.permission.ACCESS_MEDIA_LOCATION), 0
-                        )
-                    }
+            //
+            // Location: installs that onboarded on Android 12+ before the COARSE fix
+            // were never shown a location dialog at all (FINE-only was ignored), so
+            // ask them once here. Both requests go in ONE call — a second concurrent
+            // requestPermissions is dropped by the platform.
+            val activity = context as? android.app.Activity
+            LaunchedEffect(Unit) {
+                if (activity == null) return@LaunchedEffect
+                fun granted(p: String) =
+                    ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
+                val toRequest = mutableListOf<String>()
+                // L-9: ask at most once — this LaunchedEffect re-fires on every return
+                // to the home route, and a hard-denied request would repeat forever.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    !prefs.getBoolean("aml_requested", false) &&
+                    !granted(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                ) {
+                    prefs.edit().putBoolean("aml_requested", true).apply()
+                    toRequest += Manifest.permission.ACCESS_MEDIA_LOCATION
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    !prefs.getBoolean("location_requested_v2", false) &&
+                    LOCATION_PERMISSIONS.none(::granted)
+                ) {
+                    prefs.edit().putBoolean("location_requested_v2", true).apply()
+                    toRequest += LOCATION_PERMISSIONS
+                }
+                if (toRequest.isNotEmpty()) {
+                    ActivityCompat.requestPermissions(activity, toRequest.toTypedArray(), 0)
                 }
             }
 
@@ -179,7 +225,8 @@ private fun AppNavigation(onThemeChange: (ThemeMode) -> Unit) {
             // hosted inside this single route — see HomeHubScreen for why none of this
             // uses NavHost destinations.
             HomeHubScreen(
-                onOpenStats    = { navController.navigate("stats") },
+                // BUG-034: a double tap on the streak card pushed Stats twice (Back x2).
+                onOpenStats    = { navController.navigate("stats") { launchSingleTop = true } },
                 onThemeChange  = onThemeChange
             )
         }

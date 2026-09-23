@@ -12,6 +12,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -90,7 +91,7 @@ class CameraViewModelTest {
 
     @Test
     fun onPhotoCaptured_immediatelyTransitionsToProcessing() = runTest {
-        coEvery { repo.savePhoto(any(), any(), any()) } coAnswers {
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } coAnswers {
             kotlinx.coroutines.delay(10_000)
             SaveResult.StorageError
         }
@@ -106,7 +107,7 @@ class CameraViewModelTest {
         val dominantHex = "#FF0000"
         val photoId = 42L
         val uri = mockk<Uri>(relaxed = true)
-        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.Success(uri, successValidation(dominantHex), photoId)
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.Success(uri, successValidation(dominantHex), photoId)
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(jpegBytes)
@@ -122,7 +123,7 @@ class CameraViewModelTest {
 
     @Test
     fun onPhotoCaptured_withValidationFailedResult_transitionsToFailedWithCorrectValues() = runTest {
-        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(jpegBytes)
@@ -139,7 +140,7 @@ class CameraViewModelTest {
 
     @Test
     fun onPhotoCaptured_withStorageError_transitionsToStorageError() = runTest {
-        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.StorageError
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.StorageError
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(jpegBytes)
@@ -208,7 +209,7 @@ class CameraViewModelTest {
         val photoId = 7L
         val photo = PhotoEntity(
             id = photoId, filePath = "file:///photos/test.jpg",
-            colorName = "Blue", colorHex = "#1E88E5", dateTaken = 0L,
+            colorName = "Blue", colorHex = "#1E88E5", dateTaken = 0L, dayIndex = 0,
             latitude = null, longitude = null, locationName = null,
             dominantColorHex = "#1E88E5"
         )
@@ -242,7 +243,7 @@ class CameraViewModelTest {
 
     @Test
     fun dismissNotePromptIfPending_whenAwaitingNote_resetsToIdle() = runTest {
-        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.Success(
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.Success(
             mockk(relaxed = true), successValidation(), photoId = 5L
         )
         val vm = buildViewModel()
@@ -274,19 +275,191 @@ class CameraViewModelTest {
     }
 
     @Test
-    fun onCaptureError_setsStorageErrorState() {
+    fun onCaptureError_setsCaptureFailedState() {
         val vm = buildViewModel()
         vm.onCaptureError()
-        assertEquals(CaptureState.StorageError, vm.captureState.value)
+        assertEquals(CaptureState.CaptureFailed, vm.captureState.value)
     }
 
     @Test
-    fun onCaptureError_fromProcessing_setsStorageError() {
+    fun onCaptureError_fromProcessing_setsCaptureFailed() {
         val vm = buildViewModel()
         vm.startCapture()
         assertEquals(CaptureState.Processing, vm.captureState.value)
         vm.onCaptureError()
+        assertEquals(CaptureState.CaptureFailed, vm.captureState.value)
+    }
+
+    // ── shutter time drives color and day (BUG-047) ──────────────────────────
+
+    @Test
+    fun capture_usesTheShutterInstant_forBothColorAndSavedTime() = runTest {
+        val colorArg = io.mockk.slot<com.colorwalk.app.domain.WalkColor>()
+        val atArg = io.mockk.slot<Long>()
+        coEvery { repo.savePhoto(any(), capture(colorArg), any(), capture(atArg), any()) } returns SaveResult.StorageError
+
+        val vm = buildViewModel()
+        val before = System.currentTimeMillis()
+        vm.startCapture()                  // shutter pressed
+        vm.onPhotoCaptured(jpegBytes)      // callback lands later
+        advanceUntilIdle()
+
+        assertTrue("saved time is the shutter press", atArg.captured in before..System.currentTimeMillis())
+        assertEquals("color is that same instant's", colorForDay(atArg.captured), colorArg.captured)
+    }
+
+    @Test
+    fun captureCrop_isPassedThroughToValidation() = runTest {
+        val crop = com.colorwalk.app.data.repository.NormalizedCrop(0.3f, 0f, 0.7f, 1f)
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.StorageError
+        val vm = buildViewModel()
+        vm.onPhotoCaptured(jpegBytes, crop = crop)
+        advanceUntilIdle()
+        coVerify { repo.savePhoto(any(), any(), any(), any(), crop) }
+    }
+
+    // ── specific failures, no crashes (BUG-021, BUG-049) ─────────────────────
+
+    @Test
+    fun saveThrowing_becomesAnErrorCard_notACrash() = runTest {
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } throws IllegalStateException("db closed")
+        val vm = buildViewModel()
+        vm.onPhotoCaptured(jpegBytes)
+        advanceUntilIdle()
         assertEquals(CaptureState.StorageError, vm.captureState.value)
+    }
+
+    @Test
+    fun importThrowing_becomesAnErrorCard_notACrash() = runTest {
+        coEvery { repo.importPhoto(any(), any()) } throws IllegalArgumentException("bad projection")
+        val vm = buildViewModel()
+        vm.onPhotoImported(mockk(relaxed = true))
+        advanceUntilIdle()
+        assertEquals(CaptureState.StorageError, vm.captureState.value)
+    }
+
+    @Test
+    fun storageFull_andUnreadable_mapToTheirOwnStates() = runTest {
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.StorageFull
+        val vm = buildViewModel()
+        vm.onPhotoCaptured(jpegBytes)
+        advanceUntilIdle()
+        assertEquals(CaptureState.StorageFull, vm.captureState.value)
+
+        coEvery { repo.importPhoto(any(), any()) } returns ImportResult.Unreadable
+        vm.onPhotoImported(mockk(relaxed = true))
+        advanceUntilIdle()
+        assertEquals(CaptureState.ImportUnreadable, vm.captureState.value)
+    }
+
+    // ── lens / zoom survive the pane (BUG-043) ───────────────────────────────
+
+    @Test
+    fun lensAndZoomChoices_liveInTheViewModel() {
+        val vm = buildViewModel()
+        vm.useFrontCamera = true
+        vm.requestedZoom = 2f
+        assertEquals(true, vm.useFrontCamera)
+        assertEquals(2f, vm.requestedZoom, 0f)
+    }
+
+    // ── note draft on leaving the pane (BUG-048) ─────────────────────────────
+
+    private suspend fun vmAwaitingNote(photoId: Long = 5L): CameraViewModel {
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns
+            SaveResult.Success(mockk(relaxed = true), successValidation(), photoId)
+        return buildViewModel().also { it.onPhotoCaptured(jpegBytes) }
+    }
+
+    @Test
+    fun leavingWithATypedNote_savesIt() = runTest {
+        val photo = mockk<PhotoEntity>(relaxed = true)
+        coEvery { repo.getPhotoById(5L) } returns photo
+        val vm = vmAwaitingNote()
+        advanceUntilIdle()
+
+        vm.onNoteDraftChanged("  sunset by the pier ")
+        vm.dismissNotePromptIfPending()
+        advanceUntilIdle()
+
+        assertEquals(CaptureState.Idle, vm.captureState.value)
+        coVerify { repo.saveDescription(photo, "sunset by the pier") }
+    }
+
+    @Test
+    fun leavingWithABlankNote_savesNothing() = runTest {
+        val vm = vmAwaitingNote()
+        advanceUntilIdle()
+        vm.onNoteDraftChanged("   ")
+        vm.dismissNotePromptIfPending()
+        advanceUntilIdle()
+        coVerify(exactly = 0) { repo.saveDescription(any(), any()) }
+    }
+
+    @Test
+    fun explicitSkip_discardsTheDraft() = runTest {
+        val vm = vmAwaitingNote()
+        advanceUntilIdle()
+        vm.onNoteDraftChanged("typed then skipped")
+        vm.resetState()                 // Skip button
+        vm.dismissNotePromptIfPending() // pane then leaves
+        advanceUntilIdle()
+        coVerify(exactly = 0) { repo.saveDescription(any(), any()) }
+    }
+
+    // ── capture abort / watchdog (BUG-001) ───────────────────────────────────
+
+    @Test
+    fun onCaptureAborted_fromProcessing_returnsToIdle() {
+        val vm = buildViewModel()
+        vm.startCapture()
+        vm.onCaptureAborted()
+        assertEquals(CaptureState.Idle, vm.captureState.value)
+    }
+
+    @Test
+    fun onCaptureAborted_whenNotProcessing_leavesStateUntouched() = runTest {
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.StorageError
+        val vm = buildViewModel()
+        vm.onPhotoCaptured(jpegBytes)
+        advanceUntilIdle()
+        vm.onCaptureAborted()
+        assertEquals(CaptureState.StorageError, vm.captureState.value)
+    }
+
+    @Test
+    fun startCapture_withNoCameraCallback_timesOutToCaptureFailed() = runTest {
+        val vm = buildViewModel()
+        vm.startCapture()
+        advanceTimeBy(CAPTURE_CALLBACK_TIMEOUT_MS - 1)
+        assertEquals(CaptureState.Processing, vm.captureState.value)
+        advanceTimeBy(2)
+        assertEquals(CaptureState.CaptureFailed, vm.captureState.value)
+    }
+
+    @Test
+    fun watchdog_isCancelledOnceTheCameraCallsBack_evenIfSaveIsSlow() = runTest {
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } coAnswers {
+            kotlinx.coroutines.delay(CAPTURE_CALLBACK_TIMEOUT_MS * 2)
+            SaveResult.StorageError
+        }
+        val vm = buildViewModel()
+        vm.startCapture()
+        vm.onPhotoCaptured(jpegBytes)
+        advanceTimeBy(CAPTURE_CALLBACK_TIMEOUT_MS + 1)
+        assertEquals(
+            "A slow save must not be cut short by the camera-callback watchdog",
+            CaptureState.Processing, vm.captureState.value
+        )
+    }
+
+    @Test
+    fun watchdog_isCancelledByOnCaptureAborted() = runTest {
+        val vm = buildViewModel()
+        vm.startCapture()
+        vm.onCaptureAborted()
+        advanceTimeBy(CAPTURE_CALLBACK_TIMEOUT_MS + 1)
+        assertEquals(CaptureState.Idle, vm.captureState.value)
     }
 
     // ── resetState ───────────────────────────────────────────────────────────
@@ -294,7 +467,7 @@ class CameraViewModelTest {
     @Test
     fun resetState_fromAwaitingNote_transitionsBackToIdle() = runTest {
         val uri = mockk<Uri>(relaxed = true)
-        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.Success(uri, successValidation(), 1L)
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.Success(uri, successValidation(), 1L)
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(jpegBytes)
@@ -308,7 +481,7 @@ class CameraViewModelTest {
 
     @Test
     fun resetState_fromFailed_transitionsBackToIdle() = runTest {
-        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.ValidationFailed(failedValidation())
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(jpegBytes)
@@ -322,7 +495,7 @@ class CameraViewModelTest {
 
     @Test
     fun resetState_fromStorageError_transitionsBackToIdle() = runTest {
-        coEvery { repo.savePhoto(any(), any(), any()) } returns SaveResult.StorageError
+        coEvery { repo.savePhoto(any(), any(), any(), any(), any()) } returns SaveResult.StorageError
 
         val vm = buildViewModel()
         vm.onPhotoCaptured(jpegBytes)

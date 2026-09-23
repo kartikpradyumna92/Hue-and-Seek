@@ -87,15 +87,22 @@ class LiveColorAnalyzer(
         val yLimit = yBuf.limit()
         val uLimit = uBuf.limit()
         val vLimit = vBuf.limit()
-        val w = image.width
-        val h = image.height
+        // BUG-014: sample only the viewport crop — the part of the frame the preview
+        // shows — so the meter agrees with what the user sees (and with validation).
+        // Without a viewport the crop is the whole frame.
+        val crop = image.cropRect
+        val fullFrame = crop.width() <= 0 || crop.height() <= 0
+        val x0 = if (fullFrame) 0 else crop.left
+        val y0 = if (fullFrame) 0 else crop.top
+        val w = if (fullFrame) image.width else crop.width()
+        val h = if (fullFrame) image.height else crop.height()
 
         var i = 0
         for (sy in 0 until SAMPLE_H) {
-            val y = sy * h / SAMPLE_H
+            val y = y0 + sy * h / SAMPLE_H
             val uvY = y shr 1
             for (sx in 0 until SAMPLE_W) {
-                val x = sx * w / SAMPLE_W
+                val x = x0 + sx * w / SAMPLE_W
                 val uvX = x shr 1
                 val lum = yBuf.getClamped(y * yPlane.rowStride + x * yPlane.pixelStride, yLimit)
                 val u = uBuf.getClamped(uvY * uPlane.rowStride + uvX * uPlane.pixelStride, uLimit)

@@ -11,11 +11,16 @@ interface PhotoDao {
     @Query("SELECT * FROM photos ORDER BY dateTaken DESC")
     fun getAllPhotos(): Flow<List<PhotoEntity>>
 
+    // BUG-041: Home needs only its 3-photo peek strip and a "did the photo set change"
+    // signal — not a full-table read on every row write.
+    @Query("SELECT * FROM photos ORDER BY dateTaken DESC LIMIT :limit")
+    fun getRecentPhotos(limit: Int): Flow<List<PhotoEntity>>
+
+    @Query("SELECT COUNT(*) AS count, MAX(dateTaken) AS newest FROM photos")
+    fun observePhotoSetSignature(): Flow<PhotoSetSignature>
+
     @Query("SELECT * FROM photos WHERE colorName = :colorName ORDER BY dateTaken DESC")
     fun getPhotosByColor(colorName: String): Flow<List<PhotoEntity>>
-
-    @Query("SELECT colorName, colorHex FROM photos GROUP BY colorName ORDER BY COUNT(*) DESC")
-    fun getDistinctColors(): Flow<List<ColorSummary>>
 
     @Query("SELECT COUNT(*) FROM photos WHERE dateTaken = :dateTaken")
     suspend fun countByDateTaken(dateTaken: Long): Int
@@ -36,6 +41,18 @@ interface PhotoDao {
     // *rows* silently caps the streak (rows != days when a day has several photos).
     @Query("SELECT dateTaken FROM photos")
     suspend fun getAllPhotoDates(): List<Long>
+
+    // Frozen per-photo day index (see PhotoEntity.dayIndex) — this, not a live
+    // re-derivation from dateTaken, is the source of truth for streak/history logic
+    // (T-1). Same no-LIMIT reasoning as getAllPhotoDates.
+    @Query("SELECT dayIndex FROM photos")
+    suspend fun getAllPhotoDayIndices(): List<Int>
+
+    // BUG-025: "captured today?" by the frozen day index — the definition Home and
+    // the streak use — not a fixed 24 h dateTaken window, which disagreed after travel
+    // and on 23/25-hour DST days.
+    @Query("SELECT EXISTS(SELECT 1 FROM photos WHERE dayIndex = :dayIndex)")
+    suspend fun hasPhotoOnDay(dayIndex: Int): Boolean
 
     @Query("SELECT id FROM photos WHERE dateTaken >= :midnightMs AND dateTaken < :tomorrowMidnightMs AND filePath LIKE 'content://%' LIMIT 1")
     suspend fun getContentUriPhotoIdForDay(midnightMs: Long, tomorrowMidnightMs: Long): Long?
@@ -75,7 +92,8 @@ interface PhotoDao {
 
 }
 
-data class ColorSummary(
-    val colorName: String,
-    val colorHex: String
+/** Cheap fingerprint of the photo set: changes on capture/import/delete, not on note/location edits. */
+data class PhotoSetSignature(
+    val count: Int,
+    val newest: Long?
 )

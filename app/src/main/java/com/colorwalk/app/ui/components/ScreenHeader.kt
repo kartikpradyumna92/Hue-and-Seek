@@ -18,6 +18,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import com.colorwalk.app.ui.theme.Spacing
+import androidx.compose.ui.res.stringResource
+import com.colorwalk.app.R
 
 /**
  * Standard screen top bar: back arrow + bold title + optional trailing content.
@@ -41,7 +43,7 @@ fun ScreenHeader(
         IconButton(onClick = onBack) {
             Icon(
                 Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.action_back),
                 tint = MaterialTheme.colorScheme.onBackground
             )
         }

@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Android 14+ "Selected photos": declaring this makes a partial grant show up
+         as READ_MEDIA_IMAGES *denied* instead of a temporary full grant, so the sync
+         can tell a complete MediaStore scan from a partial one (BUG-027). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <!-- Pre-Android-13 equivalent of READ_MEDIA_IMAGES; without this declaration the
          runtime request on API 26-32 is denied instantly with no dialog (A3). -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -30,14 +34,18 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:label="Hue &amp; Seek"
+        android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.ColorPicture">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:screenOrientation="portrait"
             android:theme="@style/Theme.ColorPicture.Splash">
+            <!-- Portrait on phones (BUG-013): the swipe hub, camera and onboarding are
+                 portrait layouts, and rotating recreated the activity mid-task. Android
+                 16 ignores this on large screens (sw600dp+), where layouts must adapt. -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

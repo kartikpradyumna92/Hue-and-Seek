@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.colorwalk.app.domain.StreakCalculator
 import java.util.Calendar
 
 object AlarmScheduler {
@@ -14,6 +15,8 @@ object AlarmScheduler {
     private const val REQUEST_LAST_CHANCE = 2003
 
     const val EXTRA_SLOT       = "SLOT"
+    /** Wall-clock millis the alarm was scheduled for — identifies which day's slot fired. */
+    const val EXTRA_TRIGGER_AT = "TRIGGER_AT"
     const val SLOT_MORNING     = "MORNING"
     const val SLOT_EVENING     = "EVENING"
     const val SLOT_LAST_CHANCE = "LAST_CHANCE"
@@ -126,14 +129,24 @@ object AlarmScheduler {
     private fun schedule(context: Context, hour: Int, minute: Int, requestCode: Int, slot: String) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
 
+        // BUG-004: never re-arm a slot for a day it already fired on. The inexact
+        // window below opens 7 min early; without this, a slot that fired at 20:55
+        // was re-armed for today's 21:00 (window already open) and fired again
+        // immediately, over and over — via the receiver's reschedule and also via
+        // scheduleBoth() on app launch / boot / time change.
+        val triggerMillis = nextTriggerMillis(
+            hour, minute,
+            lastFiredDayIndex = NotificationPrefs.getLastFiredDay(context, slot)
+        )
+
         val intent = PendingIntent.getBroadcast(
             context,
             requestCode,
-            Intent(context, StreakReminderReceiver::class.java).putExtra(EXTRA_SLOT, slot),
+            Intent(context, StreakReminderReceiver::class.java)
+                .putExtra(EXTRA_SLOT, slot)
+                .putExtra(EXTRA_TRIGGER_AT, triggerMillis),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        val triggerMillis = nextTriggerMillis(hour, minute)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (alarmManager.canScheduleExactAlarms()) {
@@ -148,10 +161,16 @@ object AlarmScheduler {
 
     /**
      * Next occurrence of the local wall-clock time [hour]:[minute] strictly after
-     * [nowMillis] — today if still ahead, otherwise the same time tomorrow.
+     * [nowMillis] — today if still ahead, otherwise the same time tomorrow — and on
+     * a local day AFTER [lastFiredDayIndex] when given (one fire per slot per day).
      * Pure (I-6: JVM-tested) — the Calendar handles month/year/DST rollover.
      */
-    internal fun nextTriggerMillis(hour: Int, minute: Int, nowMillis: Long = System.currentTimeMillis()): Long =
+    internal fun nextTriggerMillis(
+        hour: Int,
+        minute: Int,
+        nowMillis: Long = System.currentTimeMillis(),
+        lastFiredDayIndex: Int? = null
+    ): Long =
         Calendar.getInstance().apply {
             timeInMillis = nowMillis
             set(Calendar.HOUR_OF_DAY, hour)
@@ -159,6 +178,11 @@ object AlarmScheduler {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
             if (timeInMillis <= nowMillis) add(Calendar.DAY_OF_YEAR, 1)
+            if (lastFiredDayIndex != null) {
+                while (StreakCalculator.epochMillisToDayIndex(timeInMillis) <= lastFiredDayIndex) {
+                    add(Calendar.DAY_OF_YEAR, 1)
+                }
+            }
         }.timeInMillis
 
     private fun cancelOne(context: Context, requestCode: Int, slot: String) {

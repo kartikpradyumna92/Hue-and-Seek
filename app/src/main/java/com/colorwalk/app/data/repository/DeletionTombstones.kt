@@ -22,6 +22,12 @@ internal object DeletionTombstones {
     private const val KEY_NAMES = "deleted_photo_filenames"
     private const val KEY_DATES = "deleted_photo_dates"
 
+    // BUG-050: record/clear/prune are read-modify-writes of the same StringSets and
+    // run on concurrent IO coroutines (two quick deletes, a prune during a delete).
+    // Unsynchronized, the last apply() wins and a tombstone is silently lost —
+    // letting that photo resurrect after a reinstall. apply() updates the in-memory
+    // map immediately, so serializing the RMW is sufficient.
+    @Synchronized
     fun record(context: Context, filename: String?, dateTaken: Long) {
         val prefs = prefs(context)
         // getStringSet's return value must never be mutated — always copy.
@@ -36,6 +42,7 @@ internal object DeletionTombstones {
     }
 
     /** Un-tombstones a photo the user deliberately re-captured or re-imported. */
+    @Synchronized
     fun clear(context: Context, filename: String, dateTaken: Long) {
         val prefs = prefs(context)
         val names = prefs.getStringSet(KEY_NAMES, null)
@@ -61,6 +68,7 @@ internal object DeletionTombstones {
      * Call ONLY with a complete, successful MediaStore scan — [liveNames]/[liveDates]
      * from a failed or permission-denied query would wipe every tombstone.
      */
+    @Synchronized
     fun pruneOrphaned(context: Context, liveNames: Set<String>, liveDates: Set<Long>) {
         val prefs = prefs(context)
         val names = prefs.getStringSet(KEY_NAMES, null)

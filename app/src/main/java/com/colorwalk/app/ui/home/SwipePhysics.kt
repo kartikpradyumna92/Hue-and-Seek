@@ -21,8 +21,17 @@ object SwipePhysics {
     /** Travel (fraction of one page) that commits on its own. */
     const val DISTANCE_COMMIT_FRACTION = 0.3f
 
-    /** Release speed that counts as a flick. */
+    /**
+     * Release speed that counts as a flick, in dp/s (BUG-042: a raw-pixel threshold
+     * made flicks commit too easily on dense phones and resist on low-density tablets).
+     */
+    const val FLICK_VELOCITY_DP_PER_S = 580f
+
+    /** The px/s threshold at the ~2.75× density the gesture feel was tuned on. */
     const val FLICK_VELOCITY_PX_PER_S = 1600f
+
+    /** Flick threshold in px/s for a screen of [density]. */
+    fun flickVelocityPx(density: Float): Float = FLICK_VELOCITY_DP_PER_S * density
 
     /** Minimum same-direction travel (fraction of a page) for a flick to count. */
     const val FLICK_MIN_DISTANCE_FRACTION = 0.08f
@@ -36,6 +45,7 @@ object SwipePhysics {
      * @param totalDelta   net finger travel this gesture (+ toward [clampMax])
      * @param velocity     release velocity in px/s (+ toward [clampMax])
      * @param viewportPx   one page's extent on this axis
+     * @param flickVelocityPx flick threshold in px/s — see [flickVelocityPx]
      */
     fun settleTarget(
         start: Float,
@@ -43,14 +53,15 @@ object SwipePhysics {
         clampMax: Float,
         totalDelta: Float,
         velocity: Float,
-        viewportPx: Int
+        viewportPx: Int,
+        flickVelocityPx: Float = FLICK_VELOCITY_PX_PER_S
     ): Float {
         val commitDistance = viewportPx * DISTANCE_COMMIT_FRACTION
         val flickFloor = viewportPx * FLICK_MIN_DISTANCE_FRACTION
         val forward = totalDelta > commitDistance ||
-                (totalDelta > flickFloor && velocity > FLICK_VELOCITY_PX_PER_S)
+                (totalDelta > flickFloor && velocity > flickVelocityPx)
         val backward = totalDelta < -commitDistance ||
-                (totalDelta < -flickFloor && velocity < -FLICK_VELOCITY_PX_PER_S)
+                (totalDelta < -flickFloor && velocity < -flickVelocityPx)
         return when {
             forward  -> clampMax
             backward -> clampMin
@@ -65,25 +76,40 @@ object SwipePhysics {
      * the strip's outer bounds, delta accumulation, and the release-velocity
      * estimate feeding [settleTarget].
      */
-    class OnePageDragSession {
+    class OnePageDragSession(
+        // BUG-042: callers pass flickVelocityPx(density).
+        private val flickVelocityPx: Float = FLICK_VELOCITY_PX_PER_S
+    ) {
         private var start = 0f
         private var clampMin = 0f
         private var clampMax = 0f
         private var total = 0f
         private val velocity = VelocityEstimator()
 
-        /** Drag value this gesture began at (a settled page position). */
+        /** The page this gesture is anchored on (always an exact page position). */
         val startValue: Float get() = start
 
         /** Smoothed velocity at (or during) release, px/s. */
         val releaseVelocity: Float get() = velocity.value
 
-        /** [boundMin]/[boundMax]: the whole strip's absolute outer limits. */
+        /**
+         * [boundMin]/[boundMax]: the whole strip's absolute outer limits.
+         *
+         * BUG-009: a gesture that catches a page mid-animation (e.g. 780 px into a
+         * 1080 px slide) used to anchor on that in-between value — a short drag then
+         * settled back there and a commit landed one page from it, leaving two pages
+         * half on screen. It now anchors on the NEAREST real page and carries the
+         * current offset as travel already made, so the position is continuous and
+         * every settle lands on a page.
+         */
         fun begin(current: Float, viewportPx: Int, boundMin: Float, boundMax: Float) {
-            start = current
-            clampMin = (current - viewportPx).coerceAtLeast(boundMin)
-            clampMax = (current + viewportPx).coerceAtMost(boundMax)
-            total = 0f
+            val anchor = if (viewportPx > 0) {
+                (kotlin.math.round(current / viewportPx) * viewportPx).coerceIn(boundMin, boundMax)
+            } else current
+            start = anchor
+            clampMin = (anchor - viewportPx).coerceAtLeast(boundMin)
+            clampMax = (anchor + viewportPx).coerceAtMost(boundMax)
+            total = current - anchor
             velocity.reset()
         }
 
@@ -96,7 +122,7 @@ object SwipePhysics {
 
         /** Where the drag should settle at release. */
         fun settleTarget(viewportPx: Int): Float =
-            SwipePhysics.settleTarget(start, clampMin, clampMax, total, velocity.value, viewportPx)
+            SwipePhysics.settleTarget(start, clampMin, clampMax, total, velocity.value, viewportPx, flickVelocityPx)
     }
 
     /**

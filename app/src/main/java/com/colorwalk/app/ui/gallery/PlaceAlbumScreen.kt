@@ -20,6 +20,9 @@ import com.colorwalk.app.ui.components.ScreenHeader
 import com.colorwalk.app.ui.theme.Spacing
 import com.colorwalk.app.viewmodel.AlbumSortOrder
 import com.colorwalk.app.viewmodel.GalleryViewModel
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
+import com.colorwalk.app.R
 
 @Composable
 fun PlaceAlbumScreen(
@@ -64,7 +67,7 @@ fun PlaceAlbumScreen(
             )
             Spacer(Modifier.width(Spacing.xs))
             Text(
-                "${photos.size} photo${if (photos.size != 1) "s" else ""}",
+                pluralStringResource(R.plurals.photo_count, photos.size, photos.size),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = Spacing.s)
@@ -82,13 +85,13 @@ fun PlaceAlbumScreen(
                 FilterChip(
                     selected = albumSortOrder == order,
                     onClick = { viewModel.setAlbumSortOrder(order) },
-                    label = { Text(order.label, style = MaterialTheme.typography.labelMedium) }
+                    label = { Text(stringResource(order.label), style = MaterialTheme.typography.labelMedium) }
                 )
             }
         }
 
         if (photos.isEmpty()) {
-            EmptyState(title = "No photos in $locationName")
+            EmptyState(title = stringResource(R.string.album_place_empty_title, locationName))
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),

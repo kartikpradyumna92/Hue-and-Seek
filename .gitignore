@@ -13,8 +13,9 @@ build/
 *.aab
 *.ap_
 
-# Gradle cache
+# Gradle / Kotlin caches
 .gradle/
+.kotlin/
 
 # IDE files
 .idea/
@@ -39,3 +40,6 @@ fable5_bugs.txt
 
 # Serena tool cache
 .serena/
+
+# Local audit notes (not tracked)
+APP_AUDIT_REPORT.txt

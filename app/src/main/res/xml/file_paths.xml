@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Least privilege (M-3): the ONLY content ever shared through the FileProvider is
-     the private photo store (ACTION_SEND from the gallery viewer and Stats screen).
+     the private photo store and its location-stripped share copies (ACTION_SEND
+     from the gallery viewer and Stats screen).
      Do not add broader roots (external-path, cache-path, …) without a concrete
      caller — every mapping here is surface a minted URI could expose. -->
 <paths>
     <!-- Private photo storage — shared via ACTION_SEND -->
     <files-path name="photos" path="photos/" />
+    <!-- Location-stripped share copies (BUG-062): PhotoFileStore.locationFreeShareCopy
+         writes ONLY there, and only copies of photos the user chose to share. -->
+    <cache-path name="shared" path="shared/" />
 </paths>

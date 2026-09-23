@@ -35,13 +35,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.imageLoader
-import coil.memory.MemoryCache
+import androidx.activity.compose.BackHandler
 import com.colorwalk.app.data.db.PhotoEntity
 import com.colorwalk.app.ui.components.ZoomableAsyncImage
 import com.colorwalk.app.ui.components.ZoomState
@@ -49,6 +49,11 @@ import com.colorwalk.app.ui.components.parseAccentHex
 import com.colorwalk.app.ui.components.photoImageRequest
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.ui.res.stringResource
+import com.colorwalk.app.R
+import com.colorwalk.app.ui.components.colorDisplayName
+import com.colorwalk.app.ui.components.localizedDateFormat
+import com.colorwalk.app.ui.components.formatClockTime
 
 private val ZOOM_LEVELS = listOf(1f, 2f, 3f, 5f)
 
@@ -59,10 +64,13 @@ fun PhotoViewerScreen(
     initialIndex: Int,
     onClose: () -> Unit,
     onDelete: (PhotoEntity) -> Unit,
-    onRotate: (PhotoEntity, onDone: () -> Unit) -> Unit,
+    // onDone(success) — the rotated image is refreshed via PhotoRevisions by the caller.
+    onRotate: (PhotoEntity, onDone: (Boolean) -> Unit) -> Unit,
     onSaveDescription: (PhotoEntity, String?) -> Unit = { _, _ -> },
     onShare: (PhotoEntity) -> Unit = {},
-    onPageChanged: (Int) -> Unit = {}
+    onPageChanged: (Int) -> Unit = {},
+    // System back closes the viewer (BUG-007) — only while its host pane is on screen.
+    backEnabled: Boolean = true
 ) {
     // Photos already arrive newest-first; page 0 = newest.
     // Swiping left → higher page index → older photo (standard photo-app convention).
@@ -85,8 +93,6 @@ fun PhotoViewerScreen(
         }
     }
 
-    // Per-photo revision counter — incremented after each rotation to bust Coil's cache
-    val rotationRevisions = remember { mutableStateMapOf<Long, Int>() }
     var isRotating by remember { mutableStateOf(false) }
 
     // Guard against the one-recomposition window where currentPage hasn't settled yet.
@@ -94,18 +100,38 @@ fun PhotoViewerScreen(
     val currentPhoto = photos.getOrNull(safeIndex) ?: return
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
+    // BUG-057: deleting shifts the next photo into the SAME page index, so the
+    // page-keyed reset above never fired and it appeared zoomed (and unpageable).
+    // Key on which photo is shown, not where.
+    LaunchedEffect(currentPhoto.id) { zoomState.reset() }
+
+    // Note editing state lives up here (not in the metadata card) so the pager can be
+    // frozen while a note is open — swiping to another photo used to throw the typed
+    // draft away (BUG-048).
+    var editingNote by remember(currentPhoto.id) { mutableStateOf(false) }
+    var draftNote by remember(currentPhoto.id) { mutableStateOf(currentPhoto.description ?: "") }
+
+    // Closing with an open, changed draft keeps it rather than discarding it (BUG-048).
+    val closeViewer = {
+        if (editingNote && draftNote.trim() != (currentPhoto.description ?: "").trim()) {
+            onSaveDescription(currentPhoto, draftNote)
+        }
+        onClose()
+    }
+    BackHandler(enabled = backEnabled) { closeViewer() }
+
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete photo?") },
-            text = { Text("This will remove it from the app and your device gallery.") },
+            title = { Text(stringResource(R.string.delete_photo_title)) },
+            text = { Text(stringResource(R.string.delete_photo_body)) },
             confirmButton = {
                 TextButton(onClick = { showDeleteConfirm = false; onDelete(currentPhoto) }) {
-                    Text("Delete", color = Color(0xFFEF5350))
+                    Text(stringResource(R.string.action_delete), color = Color(0xFFEF5350))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
+                TextButton(onClick = { showDeleteConfirm = false }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -121,16 +147,25 @@ fun PhotoViewerScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondBoundsPageCount = 1,
-            userScrollEnabled = zoomState.scale == 1f
+            userScrollEnabled = zoomState.scale == 1f && !editingNote
         ) { page ->
             val photo = photos[page]
-            val revision = rotationRevisions[photo.id] ?: 0
-            val cacheKey = "${photo.filePath}::$revision"
             // Single-finger swipes at scale=1 are left unconsumed so HorizontalPager
             // still receives them; pinch or pan-while-zoomed is handled internally.
+            // (photoImageRequest folds the photo's rotation revision into the key.)
+            // BUG-039: the photo itself was invisible to TalkBack.
+            val photoColor = colorDisplayName(photo.colorName)
+            val photoLabel = remember(photo.id, photo.dateTaken, photoColor) {
+                context.getString(
+                    R.string.photo_desc_at, photoColor,
+                    java.text.DateFormat
+                        .getDateTimeInstance(java.text.DateFormat.LONG, java.text.DateFormat.SHORT)
+                        .format(Date(photo.dateTaken))
+                )
+            }
             ZoomableAsyncImage(
-                model = photoImageRequest(context, photo.filePath, cacheKey),
-                contentDescription = null,
+                model = photoImageRequest(context, photo.filePath, photo.filePath),
+                contentDescription = photoLabel,
                 state = zoomState,
                 modifier = Modifier.fillMaxSize()
             )
@@ -145,19 +180,19 @@ fun PhotoViewerScreen(
             contentAlignment = Alignment.Center
         ) {
             IconButton(
-                onClick = onClose,
+                onClick = closeViewer,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .size(48.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.55f))
             ) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close), tint = Color.White)
             }
 
             if (photos.size > 1) {
                 Text(
-                    "${pagerState.currentPage + 1} / ${photos.size}",
+                    stringResource(R.string.viewer_position, pagerState.currentPage + 1, photos.size),
                     color = Color.White.copy(alpha = 0.8f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -179,24 +214,14 @@ fun PhotoViewerScreen(
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.55f))
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
+                    Icon(Icons.Default.Share, contentDescription = stringResource(R.string.action_share), tint = Color.White)
                 }
 
                 IconButton(
                     onClick = {
                         if (!isRotating) {
                             isRotating = true
-                            onRotate(currentPhoto) {
-                                // Clear old cache entries so thumbnails in album views also update
-                                context.imageLoader.memoryCache?.remove(
-                                    MemoryCache.Key("${currentPhoto.filePath}::${rotationRevisions[currentPhoto.id] ?: 0}")
-                                )
-                                context.imageLoader.diskCache?.remove(
-                                    "${currentPhoto.filePath}::${rotationRevisions[currentPhoto.id] ?: 0}"
-                                )
-                                rotationRevisions[currentPhoto.id] = (rotationRevisions[currentPhoto.id] ?: 0) + 1
-                                isRotating = false
-                            }
+                            onRotate(currentPhoto) { isRotating = false }
                         }
                     },
                     enabled = !isRotating,
@@ -205,7 +230,7 @@ fun PhotoViewerScreen(
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.55f))
                 ) {
-                    Icon(Icons.Default.RotateRight, contentDescription = "Rotate", tint = Color.White)
+                    Icon(Icons.Default.RotateRight, contentDescription = stringResource(R.string.action_rotate), tint = Color.White)
                 }
 
                 IconButton(
@@ -215,7 +240,7 @@ fun PhotoViewerScreen(
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.55f))
                 ) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFEF9A9A))
+                    Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete), tint = Color(0xFFEF9A9A))
                 }
             }
         }
@@ -226,6 +251,9 @@ fun PhotoViewerScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                // BUG-032: edge-to-edge means the window no longer resizes for the
+                // keyboard — lift the note field above it ourselves.
+                .imePadding()
         ) {
             // Zoom buttons
             Row(
@@ -238,6 +266,9 @@ fun PhotoViewerScreen(
                 ZOOM_LEVELS.forEach { level ->
                     val active = zoomState.scale == level
                     val label = if (level == 1f) "1×" else "${level.toInt()}×"
+                    val zoomDesc = stringResource(
+                        if (active) R.string.zoom_level_desc_selected else R.string.zoom_level_desc, label
+                    )
                     Box(
                         modifier = Modifier
                             .padding(horizontal = 4.dp)
@@ -245,7 +276,7 @@ fun PhotoViewerScreen(
                             .clip(CircleShape)
                             .background(if (active) Color.White else Color.Black.copy(alpha = 0.55f))
                             .semantics(mergeDescendants = true) {
-                                contentDescription = "$label zoom" + if (active) ", selected" else ""
+                                contentDescription = zoomDesc
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -268,14 +299,13 @@ fun PhotoViewerScreen(
             // Metadata card — always 4 lines, fixed structure
             val accentColor = parseAccentHex(currentPhoto.colorHex)
             val dominantColor = parseAccentHex(currentPhoto.dominantColorHex)
+            val viewerContext = LocalContext.current
             val dateStr = remember(currentPhoto.dateTaken) {
-                SimpleDateFormat("EEEE, MMMM d yyyy  •  h:mm a", Locale.getDefault())
-                    .format(Date(currentPhoto.dateTaken))
+                val date = Date(currentPhoto.dateTaken)
+                localizedDateFormat("yMMMMEEEEd").format(date) + "  •  " + formatClockTime(viewerContext, date)
             }
             var captionExpanded by remember(currentPhoto.id) { mutableStateOf(false) }
             var captionOverflows by remember(currentPhoto.id) { mutableStateOf(false) }
-            var editingNote by remember(currentPhoto.id) { mutableStateOf(false) }
-            var draftNote by remember(currentPhoto.id) { mutableStateOf(currentPhoto.description ?: "") }
             val noteFocusRequester = remember(currentPhoto.id) { FocusRequester() }
             val focusManager = LocalFocusManager.current
 
@@ -310,7 +340,7 @@ fun PhotoViewerScreen(
                         )
                         Spacer(Modifier.width(7.dp))
                         Text(
-                            currentPhoto.colorName,
+                            colorDisplayName(currentPhoto.colorName),
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = accentColor
@@ -325,9 +355,9 @@ fun PhotoViewerScreen(
                         )
                         Spacer(Modifier.width(5.dp))
                         Text(
-                            "Dominant ${currentPhoto.dominantColorHex.uppercase()}",
+                            stringResource(R.string.viewer_dominant, currentPhoto.dominantColorHex.uppercase()),
                             fontSize = 11.sp,
-                            color = Color.White.copy(alpha = 0.45f)
+                            color = Color.White.copy(alpha = 0.6f)
                         )
                     }
                 }
@@ -391,8 +421,8 @@ fun PhotoViewerScreen(
                             ) {
                                 if (draftNote.isEmpty()) {
                                     Text(
-                                        "Write a note about this moment…",
-                                        color = Color.White.copy(alpha = 0.3f),
+                                        stringResource(R.string.note_hint_write),
+                                        color = Color.White.copy(alpha = 0.6f),
                                         fontSize = 13.sp,
                                         fontStyle = FontStyle.Italic
                                     )
@@ -408,13 +438,13 @@ fun PhotoViewerScreen(
                         TextButton(
                             onClick = { editingNote = false; focusManager.clearFocus() },
                             colors = ButtonDefaults.textButtonColors(
-                                contentColor = Color.White.copy(alpha = 0.45f)
+                                contentColor = Color.White.copy(alpha = 0.6f)
                             )
-                        ) { Text("Cancel", fontSize = 12.sp) }
+                        ) { Text(stringResource(R.string.action_cancel), fontSize = 12.sp) }
                         TextButton(
                             onClick = { commitNote() },
                             colors = ButtonDefaults.textButtonColors(contentColor = accentColor)
-                        ) { Text("Save", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) }
+                        ) { Text(stringResource(R.string.action_save), fontWeight = FontWeight.SemiBold, fontSize = 12.sp) }
                     }
                 } else {
                     val caption = currentPhoto.description
@@ -437,14 +467,18 @@ fun PhotoViewerScreen(
                             )
                             if (captionOverflows || captionExpanded) {
                                 Text(
-                                    text = if (captionExpanded) "Show less" else "Show more",
+                                    text = stringResource(if (captionExpanded) R.string.viewer_show_less else R.string.viewer_show_more),
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = accentColor,
-                                    modifier = Modifier.clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) { captionExpanded = !captionExpanded }
+                                    // BUG-039: a 12sp text link was a ~16dp tap target.
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null,
+                                            role = Role.Button
+                                        ) { captionExpanded = !captionExpanded }
                                 )
                             }
                         }
@@ -463,16 +497,16 @@ fun PhotoViewerScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "Add a note…",
+                                stringResource(R.string.note_add_prompt),
                                 fontSize = 13.sp,
-                                color = Color.White.copy(alpha = 0.3f),
+                                color = Color.White.copy(alpha = 0.6f),
                                 fontStyle = FontStyle.Italic,
                                 modifier = Modifier.weight(1f)
                             )
                             Icon(
                                 Icons.Default.EditNote,
-                                contentDescription = "Add note",
-                                tint = Color.White.copy(alpha = 0.2f),
+                                contentDescription = stringResource(R.string.note_add_desc),
+                                tint = Color.White.copy(alpha = 0.6f),
                                 modifier = Modifier.size(16.dp)
                             )
                         }
